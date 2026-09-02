@@ -65,9 +65,3 @@ Run the desktop app in development:
 Build a Debian package:
 
     npm run tauri build -- --bundles deb
-
-## Method reference
-
-The behavior is based on Todoist's overview of the Pomodoro Technique: https://www.todoist.com/productivity-methods/pomodoro-technique
-
-Pomodoro is an original, independent application and is not affiliated with Todoist.
