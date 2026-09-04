@@ -1,5 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AppSnapshot, Phase, Settings } from "../types";
+import type {
+  AppSnapshot,
+  NotificationFilter,
+  Phase,
+  Settings,
+} from "../types";
 
 type CommandArgs = Record<string, unknown>;
 
@@ -36,4 +41,13 @@ export const api = {
   updateSettings: (settings: Settings) =>
     command("update_settings", { settings }),
   clearHistory: () => command("clear_history"),
+  setNotificationFilter: (filter: NotificationFilter) =>
+    command("set_notification_filter", { filter }),
+  triageNotification: (id: string, triaged: boolean) =>
+    command("triage_notification", { id, triaged }),
+  convertNotification: (id: string) =>
+    command("convert_notification", { id }),
+  deleteNotification: (id: string) =>
+    command("delete_notification", { id }),
+  clearNotifications: () => command("clear_notifications"),
 };

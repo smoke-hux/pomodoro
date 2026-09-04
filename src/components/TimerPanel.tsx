@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Pause, Play, RotateCcw, SkipForward } from "lucide-react";
 import type { FocusTask, Phase, TimerState } from "../types";
 
@@ -40,6 +41,32 @@ export function TimerPanel({
       ? ((timer.durationSeconds - timer.remainingSeconds) / timer.durationSeconds) * 100
       : 0;
   const needsTask = timer.phase === "focus" && !activeTask;
+
+  // Skipping a break costs nothing. Skipping a focus interval throws away the
+  // elapsed work — and the control sits next to Reset with the same styling, so
+  // it asks once first. Breaks stay a single click.
+  const [confirmSkip, setConfirmSkip] = useState(false);
+  const skipDiscardsCredit = timer.phase === "focus" && timer.status !== "idle";
+
+  useEffect(() => {
+    setConfirmSkip(false);
+  }, [timer.phase, timer.status]);
+
+  useEffect(() => {
+    if (!confirmSkip) return;
+    const timeout = window.setTimeout(() => setConfirmSkip(false), 4_000);
+    return () => window.clearTimeout(timeout);
+  }, [confirmSkip]);
+
+  const handleSkip = () => {
+    if (skipDiscardsCredit && !confirmSkip) {
+      setConfirmSkip(true);
+      return;
+    }
+    setConfirmSkip(false);
+    onSkip();
+  };
+
   const actionLabel =
     timer.status === "running"
       ? "Pause"
@@ -151,12 +178,13 @@ export function TimerPanel({
             <RotateCcw aria-hidden="true" size={17} /> Reset
           </button>
           <button
-            className="secondary-control"
+            className={`secondary-control${confirmSkip ? " confirming" : ""}`}
             type="button"
-            onClick={onSkip}
+            onClick={handleSkip}
             title={timer.phase === "focus" ? "End focus without credit" : "Skip this break"}
           >
-            <SkipForward aria-hidden="true" size={17} /> Skip
+            <SkipForward aria-hidden="true" size={17} />{" "}
+            {confirmSkip ? "Discard session?" : "Skip"}
           </button>
         </div>
         <p className="shortcut-hint">

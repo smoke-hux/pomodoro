@@ -1,10 +1,16 @@
 mod domain;
+mod notifications;
 mod storage;
 
-use std::{sync::Mutex, thread, time::Duration};
+use std::{
+    sync::{Arc, Mutex},
+    thread,
+    time::Duration,
+};
 
 use chrono::Utc;
-use domain::{AppData, InterruptionCategory, Phase, Settings, TimerStatus};
+use domain::{AppData, InterruptionCategory, NotificationFilter, Phase, Settings, TimerStatus};
+use notifications::NotificationListener;
 use storage::Store;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -16,6 +22,7 @@ use tauri_plugin_notification::NotificationExt;
 struct RuntimeState {
     data: Mutex<AppData>,
     store: Store,
+    listener: Arc<NotificationListener>,
 }
 
 fn now_ms() -> i64 {
@@ -53,6 +60,49 @@ fn notify_boundary(app: &AppHandle, completed: Phase, snapshot: &AppData) {
 
 fn publish(app: &AppHandle, snapshot: &AppData) {
     let _ = app.emit("state-changed", snapshot.clone());
+}
+
+/// Files an observed notification, persists it and broadcasts the new state.
+///
+/// Runs on the monitoring thread. The notification text goes into the local
+/// store and into the frontend event; it is never logged.
+fn record_notification(app: &AppHandle, event: notifications::NotifyEvent) {
+    let state = app.state::<RuntimeState>();
+    let now = now_ms();
+    let Ok(mut data) = state.data.lock() else {
+        return;
+    };
+    if data
+        .capture_notification(
+            event.app_name,
+            event.summary,
+            event.body,
+            event.urgency,
+            now,
+        )
+        .is_none()
+    {
+        return;
+    }
+    if let Err(error) = state.store.save(&data) {
+        eprintln!("could not save captured notification: {error}");
+    }
+    let snapshot = data.snapshot(now);
+    drop(data);
+    publish(app, &snapshot);
+}
+
+/// Brings the monitoring thread in line with the persisted filter. Idempotent,
+/// so it is safe to call after any settings change.
+fn sync_listener(app: &AppHandle, state: &RuntimeState, enabled: bool) {
+    if !enabled {
+        state.listener.stop();
+        return;
+    }
+    let handle = app.clone();
+    state
+        .listener
+        .start(move |event| record_notification(&handle, event));
 }
 
 fn reconcile(state: &RuntimeState, app: &AppHandle) -> Result<AppData, String> {
@@ -317,8 +367,81 @@ fn update_settings(
     state: State<'_, RuntimeState>,
     app: AppHandle,
 ) -> Result<AppData, String> {
-    mutate(&state, &app, move |data, _| {
+    let snapshot = mutate(&state, &app, move |data, _| {
         data.update_settings(settings);
+        Ok(())
+    })?;
+    sync_listener(&app, &state, snapshot.settings.notification_filter.enabled);
+    Ok(snapshot)
+}
+
+#[tauri::command]
+fn set_notification_filter(
+    filter: NotificationFilter,
+    state: State<'_, RuntimeState>,
+    app: AppHandle,
+) -> Result<AppData, String> {
+    let snapshot = mutate(&state, &app, move |data, _| {
+        data.settings.notification_filter = filter.sanitized();
+        Ok(())
+    })?;
+    sync_listener(&app, &state, snapshot.settings.notification_filter.enabled);
+    Ok(snapshot)
+}
+
+#[tauri::command]
+fn triage_notification(
+    id: String,
+    triaged: bool,
+    state: State<'_, RuntimeState>,
+    app: AppHandle,
+) -> Result<AppData, String> {
+    mutate(&state, &app, move |data, _| {
+        if !data.set_notification_triaged(&id, triaged) {
+            return Err("Notification not found.".to_string());
+        }
+        Ok(())
+    })
+}
+
+#[tauri::command]
+fn convert_notification(
+    id: String,
+    state: State<'_, RuntimeState>,
+    app: AppHandle,
+) -> Result<AppData, String> {
+    mutate(&state, &app, move |data, now| {
+        let summary = data
+            .notifications
+            .iter()
+            .find(|notification| notification.id == id)
+            .map(|notification| notification.summary.clone())
+            .ok_or_else(|| "Notification not found.".to_string())?;
+        data.create_task(summary, 1, now)
+            .ok_or_else(|| "This notification has no summary to name a task.".to_string())?;
+        data.set_notification_triaged(&id, true);
+        Ok(())
+    })
+}
+
+#[tauri::command]
+fn delete_notification(
+    id: String,
+    state: State<'_, RuntimeState>,
+    app: AppHandle,
+) -> Result<AppData, String> {
+    mutate(&state, &app, move |data, _| {
+        if !data.delete_notification(&id) {
+            return Err("Notification not found.".to_string());
+        }
+        Ok(())
+    })
+}
+
+#[tauri::command]
+fn clear_notifications(state: State<'_, RuntimeState>, app: AppHandle) -> Result<AppData, String> {
+    mutate(&state, &app, |data, _| {
+        data.clear_notifications();
         Ok(())
     })
 }
@@ -392,13 +515,17 @@ pub fn run() {
                     AppData::default()
                 }
             };
+            let capture_enabled = data.settings.notification_filter.enabled;
             app.manage(RuntimeState {
                 data: Mutex::new(data),
                 store,
+                listener: Arc::new(NotificationListener::new()),
             });
             build_tray(app)?;
 
             let handle = app.handle().clone();
+            sync_listener(&handle, &handle.state::<RuntimeState>(), capture_enabled);
+
             thread::spawn(move || loop {
                 thread::sleep(Duration::from_millis(500));
                 let state = handle.state::<RuntimeState>();
@@ -431,6 +558,11 @@ pub fn run() {
             convert_interruption_to_task,
             update_settings,
             clear_history,
+            set_notification_filter,
+            triage_notification,
+            convert_notification,
+            delete_notification,
+            clear_notifications,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pomodoro");

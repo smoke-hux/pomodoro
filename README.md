@@ -1,12 +1,12 @@
 # Pomodoro
 
-Pomodoro is a local-first focus timer for Ubuntu. It follows the Pomodoro Technique with focused work intervals, short breaks, and a long break after four completed focus rounds.
+Pomodoro is a local-first focus timer for Ubuntu. It follows the Pomodoro Technique: focused work intervals, short breaks, and a long break after four completed rounds.
 
 ## What it includes
 
 - A 25-minute focus, 5-minute short-break, and 15-minute long-break cycle by default
 - Configurable durations, round count, automatic transitions, notifications, sound, and theme
-- A task list with Pomodoro estimates and completed-session counts
+- A task list with focus-session estimates and completed-session counts
 - A warning when a task is estimated above four sessions, encouraging smaller steps
 - Fast interruption capture that does not stop the timer
 - A daily session ledger with planned capacity, completed focus time, and interruptions
@@ -45,6 +45,16 @@ Application data is stored beneath the standard Linux user data directory, norma
 
 Settings includes an explicit, confirmed action for clearing session history. Removing the application does not automatically remove this local data file.
 
+### Upgrading from the Kipindi build
+
+This app was previously named Kipindi and used the bundle identifier `app.kipindi.timer`, which put its data at a different path. If you ran that build, carry your tasks, settings, and session history across once:
+
+    mkdir -p ~/.local/share/app.pomodoro.timer
+    cp ~/.local/share/app.kipindi.timer/kipindi.json \
+       ~/.local/share/app.pomodoro.timer/pomodoro.json
+
+The old directory is left in place. Remove it once the new build has started cleanly and your history looks right.
+
 ## Develop
 
 Required Ubuntu packages:
@@ -70,4 +80,4 @@ Build a Debian package:
 
 The behavior is based on Todoist's overview of the Pomodoro Technique: https://www.todoist.com/productivity-methods/pomodoro-technique
 
-Pomodoro is an original, independent application and is not affiliated with Todoist.
+Pomodoro is an original, independent application. It is not affiliated with Todoist, nor with Francesco Cirillo, who created the Pomodoro Technique and holds the associated trademarks.

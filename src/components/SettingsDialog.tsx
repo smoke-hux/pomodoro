@@ -1,13 +1,102 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
-import type { Settings } from "../types";
+import type { NotificationFilter, Settings } from "../types";
 
 interface SettingsDialogProps {
   open: boolean;
   settings: Settings;
+  notificationCount: number;
   onClose: () => void;
   onSave: (settings: Settings) => Promise<void>;
   onClearHistory: () => Promise<void>;
+  onClearNotifications: () => Promise<void>;
+}
+
+// A named list of app names, added one at a time and removed by chip. Matching
+// on the backend is case-insensitive, so a duplicate that differs only in case
+// is silently folded into the existing entry rather than listed twice.
+function AppListEditor({
+  id,
+  label,
+  hint,
+  items,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  hint: string;
+  items: string[];
+  disabled: boolean;
+  onChange: (items: string[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const cleaned = draft.trim();
+
+  const add = () => {
+    if (!cleaned) return;
+    const known = items.some(
+      (item) => item.toLowerCase() === cleaned.toLowerCase(),
+    );
+    if (!known) onChange([...items, cleaned]);
+    setDraft("");
+  };
+
+  return (
+    <div className={`app-list ${disabled ? "setting-disabled" : ""}`}>
+      <label htmlFor={id}>{label}</label>
+      <small id={`${id}-hint`}>{hint}</small>
+      <div className="app-list-entry">
+        <input
+          id={id}
+          type="text"
+          value={draft}
+          disabled={disabled}
+          maxLength={64}
+          placeholder="App name"
+          aria-describedby={`${id}-hint`}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            // The dialog is one big form. Enter here means "add", not "save".
+            if (event.key === "Enter") {
+              event.preventDefault();
+              add();
+            }
+          }}
+        />
+        <button
+          className="secondary-control"
+          type="button"
+          disabled={disabled || !cleaned}
+          onClick={add}
+        >
+          Add
+        </button>
+      </div>
+      {items.length > 0 && (
+        <ul className="app-chips">
+          {items.map((item, index) => (
+            // Keyed and removed by position: a stored list written before this
+            // editor existed may hold two entries that differ only in case, and
+            // removing by value would take both.
+            <li key={`${index}-${item}`}>
+              <span>{item}</span>
+              <button
+                type="button"
+                disabled={disabled}
+                aria-label={`Remove ${item} from ${label.toLowerCase()}`}
+                onClick={() =>
+                  onChange(items.filter((_, position) => position !== index))
+                }
+              >
+                <X aria-hidden="true" size={13} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 function NumberSetting({
@@ -50,21 +139,30 @@ function NumberSetting({
 export function SettingsDialog({
   open,
   settings,
+  notificationCount,
   onClose,
   onSave,
   onClearHistory,
+  onClearNotifications,
 }: SettingsDialogProps) {
   const [draft, setDraft] = useState(settings);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [confirmClearNotifications, setConfirmClearNotifications] = useState(false);
 
   useEffect(() => {
     if (open) {
       setDraft(settings);
       setConfirmClear(false);
+      setConfirmClearNotifications(false);
     }
   }, [open, settings]);
 
   if (!open) return null;
+
+  const filter = draft.notificationFilter;
+  const setFilter = (patch: Partial<NotificationFilter>) =>
+    setDraft({ ...draft, notificationFilter: { ...filter, ...patch } });
+  const captureOff = !filter.enabled;
 
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
@@ -186,6 +284,74 @@ export function SettingsDialog({
             </fieldset>
 
             <fieldset>
+              <legend>Notification capture</legend>
+              <p className="fieldset-note">
+                Pomodoro can watch the desktop notification service and file what
+                other apps send, so it can be read after the interval instead of
+                during it. Captured text stays in Pomodoro’s local data on this
+                machine. It is never sent anywhere, and the app makes no network
+                requests. Capture stays off until you turn it on here.
+              </p>
+              <label className="toggle-row">
+                <span>
+                  <strong>Capture desktop notifications</strong>
+                  <small>Off by default. Nothing is watched until this is on.</small>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={filter.enabled}
+                  onChange={(event) => setFilter({ enabled: event.target.checked })}
+                />
+              </label>
+              <div className={`setting-row ${captureOff ? "setting-disabled" : ""}`}>
+                <label htmlFor="min-urgency">Minimum urgency</label>
+                <select
+                  id="min-urgency"
+                  value={String(filter.minUrgency)}
+                  disabled={captureOff}
+                  onChange={(event) =>
+                    setFilter({
+                      minUrgency: Number(event.target.value) as
+                        NotificationFilter["minUrgency"],
+                    })
+                  }
+                >
+                  <option value="0">Low and above</option>
+                  <option value="1">Normal and above</option>
+                  <option value="2">Urgent only</option>
+                </select>
+              </div>
+              <label className={`toggle-row ${captureOff ? "setting-disabled" : ""}`}>
+                <span>
+                  <strong>Only during focus</strong>
+                  <small>Ignore anything that arrives outside a focus interval.</small>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={filter.focusOnly}
+                  disabled={captureOff}
+                  onChange={(event) => setFilter({ focusOnly: event.target.checked })}
+                />
+              </label>
+              <AppListEditor
+                id="muted-apps"
+                label="Muted apps"
+                hint="Never captured. Muting wins over priority."
+                items={filter.mutedApps}
+                disabled={captureOff}
+                onChange={(mutedApps) => setFilter({ mutedApps })}
+              />
+              <AppListEditor
+                id="priority-apps"
+                label="Priority apps"
+                hint="Always captured, ignoring minimum urgency and the focus-only rule."
+                items={filter.priorityApps}
+                disabled={captureOff}
+                onChange={(priorityApps) => setFilter({ priorityApps })}
+              />
+            </fieldset>
+
+            <fieldset>
               <legend>Appearance</legend>
               <div className="setting-row">
                 <label htmlFor="theme">Theme</label>
@@ -225,6 +391,43 @@ export function SettingsDialog({
                 ) : (
                   <button className="secondary-control" type="button" onClick={() => setConfirmClear(true)}>
                     Clear history
+                  </button>
+                )}
+              </div>
+              <div className="data-row">
+                <span>
+                  <strong>Captured notifications</strong>
+                  <small>
+                    {notificationCount === 0
+                      ? "Nothing is filed right now."
+                      : `Removes all ${notificationCount} captured copies, including their message text. Tasks already made from them stay.`}
+                  </small>
+                </span>
+                {confirmClearNotifications ? (
+                  <span className="clear-confirm">
+                    <button
+                      className="text-button"
+                      type="button"
+                      onClick={() => setConfirmClearNotifications(false)}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="danger-button"
+                      type="button"
+                      onClick={() => void onClearNotifications()}
+                    >
+                      Confirm clear
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    className="secondary-control"
+                    type="button"
+                    disabled={notificationCount === 0}
+                    onClick={() => setConfirmClearNotifications(true)}
+                  >
+                    Clear captured
                   </button>
                 )}
               </div>

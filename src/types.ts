@@ -3,6 +3,25 @@ export type TimerStatus = "idle" | "running" | "paused";
 export type SessionOutcome = "completed" | "skipped" | "abandoned";
 export type ThemePreference = "system" | "light" | "dark";
 
+export interface DesktopNotification {
+  id: string;
+  appName: string;
+  summary: string;
+  body: string;
+  urgency: 0 | 1 | 2;
+  receivedAt: number;
+  duringFocus: boolean;
+  triaged: boolean;
+}
+
+export interface NotificationFilter {
+  enabled: boolean;
+  minUrgency: 0 | 1 | 2;
+  mutedApps: string[];
+  priorityApps: string[];
+  focusOnly: boolean;
+}
+
 export interface Settings {
   focusMinutes: number;
   shortBreakMinutes: number;
@@ -13,6 +32,7 @@ export interface Settings {
   notifications: boolean;
   sound: boolean;
   theme: ThemePreference;
+  notificationFilter: NotificationFilter;
 }
 
 export interface TimerState {
@@ -62,6 +82,7 @@ export interface AppSnapshot {
   tasks: FocusTask[];
   interruptions: Interruption[];
   sessions: SessionRecord[];
+  notifications: DesktopNotification[];
 }
 
 export const defaultSnapshot: AppSnapshot = {
@@ -75,6 +96,14 @@ export const defaultSnapshot: AppSnapshot = {
     notifications: true,
     sound: true,
     theme: "system",
+    // Capture is opt-in. Nothing is watched until the user says so.
+    notificationFilter: {
+      enabled: false,
+      minUrgency: 0,
+      mutedApps: [],
+      priorityApps: [],
+      focusOnly: false,
+    },
   },
   timer: {
     phase: "focus",
@@ -89,4 +118,5 @@ export const defaultSnapshot: AppSnapshot = {
   tasks: [],
   interruptions: [],
   sessions: [],
+  notifications: [],
 };

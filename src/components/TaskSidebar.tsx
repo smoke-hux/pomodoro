@@ -7,12 +7,16 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import type { FocusTask, Interruption } from "../types";
+import type { DesktopNotification, FocusTask, Interruption } from "../types";
+import { NotificationInbox } from "./NotificationInbox";
 
 interface TaskSidebarProps {
   tasks: FocusTask[];
   interruptions: Interruption[];
+  notifications: DesktopNotification[];
+  captureEnabled: boolean;
   activeTaskId: string | null;
+  addRequest: number;
   selectionLocked: boolean;
   onSelectTask: (id: string) => void;
   onAddTask: (title: string, estimate: number) => Promise<void>;
@@ -22,12 +26,19 @@ interface TaskSidebarProps {
   onHandleInterruption: (id: string, handled: boolean) => void;
   onConvertInterruption: (id: string) => void;
   onDeleteInterruption: (id: string) => void;
+  onTriageNotification: (id: string, triaged: boolean) => void;
+  onConvertNotification: (id: string) => void;
+  onDeleteNotification: (id: string) => void;
+  onOpenSettings: () => void;
 }
 
 export function TaskSidebar({
   tasks,
   interruptions,
+  notifications,
+  captureEnabled,
   activeTaskId,
+  addRequest,
   selectionLocked,
   onSelectTask,
   onAddTask,
@@ -37,6 +48,10 @@ export function TaskSidebar({
   onHandleInterruption,
   onConvertInterruption,
   onDeleteInterruption,
+  onTriageNotification,
+  onConvertNotification,
+  onDeleteNotification,
+  onOpenSettings,
 }: TaskSidebarProps) {
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
@@ -50,6 +65,13 @@ export function TaskSidebar({
     if (adding) inputRef.current?.focus();
   }, [adding]);
 
+  // Ctrl+N raises this counter. Reacting to it keeps the shortcut owned by the
+  // component that holds the composer, rather than reaching across the DOM for
+  // the button and synthesising a click.
+  useEffect(() => {
+    if (addRequest > 0) setAdding(true);
+  }, [addRequest]);
+
   const submit = async () => {
     const cleaned = title.trim();
     if (!cleaned) return;
@@ -59,8 +81,15 @@ export function TaskSidebar({
     setAdding(false);
   };
 
+  // A section with nothing filed in it should not hold a third of the sidebar
+  // open. When capture is quiet the row collapses to its heading and one line.
+  const capturesQuiet = notifications.length === 0;
+
   return (
-    <aside className="sidebar" aria-label="Tasks and interruption inbox">
+    <aside
+      className={`sidebar ${capturesQuiet ? "captures-quiet" : ""}`}
+      aria-label="Tasks, interruptions, and captured notifications"
+    >
       <section className="sidebar-section task-section" aria-labelledby="tasks-heading">
         <div className="section-bar">
           <h2 id="tasks-heading">Today</h2>
@@ -275,6 +304,15 @@ export function TaskSidebar({
           )}
         </div>
       </section>
+
+      <NotificationInbox
+        notifications={notifications}
+        captureEnabled={captureEnabled}
+        onTriage={onTriageNotification}
+        onConvert={onConvertNotification}
+        onDelete={onDeleteNotification}
+        onOpenSettings={onOpenSettings}
+      />
     </aside>
   );
 }

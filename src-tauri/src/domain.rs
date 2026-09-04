@@ -5,6 +5,12 @@ const MAX_MINUTES: u32 = 24 * 60;
 const MIN_ROUNDS: u32 = 1;
 const MAX_ROUNDS: u32 = 24;
 
+/// The highest urgency the freedesktop notification specification defines.
+pub const MAX_URGENCY: u8 = 2;
+/// Newest-first retention cap so the local JSON store cannot grow without
+/// bound.
+pub const NOTIFICATION_RETENTION: usize = 200;
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Phase {
@@ -55,6 +61,75 @@ pub enum InterruptionCategory {
     External,
 }
 
+/// A desktop notification observed on the session bus.
+///
+/// `summary` and `body` routinely carry message contents and one-time codes.
+/// They are written to the local JSON store and nowhere else: never logged,
+/// never transmitted.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DesktopNotification {
+    pub id: String,
+    pub app_name: String,
+    pub summary: String,
+    pub body: String,
+    /// 0 low, 1 normal, 2 critical.
+    pub urgency: u8,
+    pub received_at: i64,
+    pub during_focus: bool,
+    pub triaged: bool,
+}
+
+/// Declares which notifications are worth keeping. Capture is off until the
+/// user opts in.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct NotificationFilter {
+    pub enabled: bool,
+    pub min_urgency: u8,
+    pub muted_apps: Vec<String>,
+    pub priority_apps: Vec<String>,
+    pub focus_only: bool,
+}
+
+impl NotificationFilter {
+    pub fn sanitized(mut self) -> Self {
+        self.min_urgency = self.min_urgency.min(MAX_URGENCY);
+        self.muted_apps = sanitized_app_list(self.muted_apps);
+        self.priority_apps = sanitized_app_list(self.priority_apps);
+        self
+    }
+
+    /// Decides whether a notification is captured.
+    ///
+    /// The order below is the contract and must not be reordered:
+    ///
+    /// 1. capture disabled -> drop everything;
+    /// 2. muted app -> drop, even if the app is also listed as priority;
+    /// 3. priority app -> keep, ignoring rules 4 and 5;
+    /// 4. focus-only while no focus interval runs -> drop;
+    /// 5. urgency below the floor -> drop;
+    /// 6. otherwise keep.
+    pub fn accepts(&self, app_name: &str, urgency: u8, during_focus: bool) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        if app_list_contains(&self.muted_apps, app_name) {
+            return false;
+        }
+        if app_list_contains(&self.priority_apps, app_name) {
+            return true;
+        }
+        if self.focus_only && !during_focus {
+            return false;
+        }
+        if urgency < self.min_urgency {
+            return false;
+        }
+        true
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
@@ -67,6 +142,7 @@ pub struct Settings {
     pub notifications: bool,
     pub sound: bool,
     pub theme: ThemePreference,
+    pub notification_filter: NotificationFilter,
 }
 
 impl Default for Settings {
@@ -81,6 +157,7 @@ impl Default for Settings {
             notifications: true,
             sound: true,
             theme: ThemePreference::System,
+            notification_filter: NotificationFilter::default(),
         }
     }
 }
@@ -91,6 +168,7 @@ impl Settings {
         self.short_break_minutes = self.short_break_minutes.clamp(MIN_MINUTES, MAX_MINUTES);
         self.long_break_minutes = self.long_break_minutes.clamp(MIN_MINUTES, MAX_MINUTES);
         self.rounds_before_long_break = self.rounds_before_long_break.clamp(MIN_ROUNDS, MAX_ROUNDS);
+        self.notification_filter = self.notification_filter.sanitized();
         self
     }
 
@@ -214,6 +292,8 @@ pub struct AppData {
     pub tasks: Vec<FocusTask>,
     pub interruptions: Vec<Interruption>,
     pub sessions: Vec<SessionRecord>,
+    /// Newest first, capped at [`NOTIFICATION_RETENTION`].
+    pub notifications: Vec<DesktopNotification>,
 }
 
 impl Default for AppData {
@@ -226,6 +306,7 @@ impl Default for AppData {
             tasks: Vec::new(),
             interruptions: Vec::new(),
             sessions: Vec::new(),
+            notifications: Vec::new(),
         }
     }
 }
@@ -539,6 +620,77 @@ impl AppData {
         }
     }
 
+    /// True while a focus interval is actually counting down.
+    pub fn is_focus_running(&self) -> bool {
+        self.timer.phase == Phase::Focus && self.timer.status == TimerStatus::Running
+    }
+
+    /// Files an observed desktop notification if the filter accepts it.
+    ///
+    /// Returns `None` when the notification was filtered out, so callers can
+    /// skip persisting and broadcasting.
+    pub fn capture_notification(
+        &mut self,
+        app_name: impl Into<String>,
+        summary: impl Into<String>,
+        body: impl Into<String>,
+        urgency: u8,
+        now_ms: i64,
+    ) -> Option<DesktopNotification> {
+        let app_name = app_name.into().trim().to_owned();
+        let urgency = urgency.min(MAX_URGENCY);
+        let during_focus = self.is_focus_running();
+        if !self
+            .settings
+            .notification_filter
+            .accepts(&app_name, urgency, during_focus)
+        {
+            return None;
+        }
+
+        let notification = DesktopNotification {
+            id: unique_notification_id(
+                now_ms,
+                self.notifications
+                    .iter()
+                    .map(|notification| notification.id.as_str()),
+            ),
+            app_name,
+            summary: summary.into(),
+            body: body.into(),
+            urgency,
+            received_at: now_ms,
+            during_focus,
+            triaged: false,
+        };
+        self.notifications.insert(0, notification.clone());
+        self.notifications.truncate(NOTIFICATION_RETENTION);
+        Some(notification)
+    }
+
+    pub fn set_notification_triaged(&mut self, id: &str, triaged: bool) -> bool {
+        let Some(notification) = self
+            .notifications
+            .iter_mut()
+            .find(|notification| notification.id == id)
+        else {
+            return false;
+        };
+        notification.triaged = triaged;
+        true
+    }
+
+    pub fn delete_notification(&mut self, id: &str) -> bool {
+        let old_len = self.notifications.len();
+        self.notifications
+            .retain(|notification| notification.id != id);
+        self.notifications.len() != old_len
+    }
+
+    pub fn clear_notifications(&mut self) {
+        self.notifications.clear();
+    }
+
     fn record_session(&mut self, outcome: SessionOutcome, now_ms: i64) {
         let phase = self.timer.phase;
         let started_at = self.timer.started_at.unwrap_or(now_ms).min(now_ms);
@@ -621,6 +773,43 @@ impl AppData {
             self.timer.ends_at = Some(deadline_from(now_ms, duration_seconds));
         }
     }
+}
+
+fn sanitized_app_list(list: Vec<String>) -> Vec<String> {
+    let mut sanitized: Vec<String> = Vec::new();
+    for entry in list {
+        let entry = entry.trim().to_owned();
+        if entry.is_empty() {
+            continue;
+        }
+        if sanitized
+            .iter()
+            .any(|existing| existing.to_lowercase() == entry.to_lowercase())
+        {
+            continue;
+        }
+        sanitized.push(entry);
+    }
+    sanitized
+}
+
+/// Application names are compared case-insensitively and ignoring surrounding
+/// whitespace, because users type them by hand.
+fn app_list_contains(list: &[String], app_name: &str) -> bool {
+    let needle = app_name.trim().to_lowercase();
+    list.iter()
+        .any(|entry| entry.trim().to_lowercase() == needle)
+}
+
+fn unique_notification_id<'a>(now_ms: i64, existing: impl Iterator<Item = &'a str>) -> String {
+    let existing: Vec<&str> = existing.collect();
+    for counter in 0_u32.. {
+        let candidate = format!("notif-{now_ms}-{counter}");
+        if !existing.iter().any(|id| *id == candidate) {
+            return candidate;
+        }
+    }
+    unreachable!("the finite set of existing IDs cannot exhaust all u32 counters")
 }
 
 fn deadline_from(now_ms: i64, seconds: u32) -> i64 {
@@ -848,5 +1037,324 @@ mod tests {
         assert_eq!(data.timer.phase, Phase::Focus);
         assert_eq!(data.timer.status, TimerStatus::Idle);
         assert_eq!(data.timer.active_task_id, None);
+    }
+    fn capturing_filter() -> NotificationFilter {
+        NotificationFilter {
+            enabled: true,
+            ..NotificationFilter::default()
+        }
+    }
+
+    fn running_focus(data: &mut AppData) {
+        data.create_task("Focus on something", 1, 0);
+        let id = data.tasks[0].id.clone();
+        data.select_task(Some(id));
+        data.start_or_resume(0);
+        assert!(data.is_focus_running());
+    }
+
+    #[test]
+    fn filter_precedence_follows_the_numbered_contract() {
+        // 1. Disabled capture drops everything, including critical urgency and
+        //    apps the user marked as priority.
+        let disabled = NotificationFilter {
+            enabled: false,
+            priority_apps: vec!["Signal".to_string()],
+            ..NotificationFilter::default()
+        };
+        assert!(!disabled.accepts("Signal", 2, true));
+        assert!(!disabled.accepts("Anything", 2, true));
+
+        // 2. A muted app is dropped, and mute wins over priority when the same
+        //    app appears in both lists.
+        let muted = NotificationFilter {
+            muted_apps: vec!["Slack".to_string()],
+            priority_apps: vec!["Slack".to_string()],
+            ..capturing_filter()
+        };
+        assert!(!muted.accepts("Slack", 2, true));
+        // Matching is case-insensitive and ignores surrounding whitespace.
+        assert!(!muted.accepts("  sLaCk ", 2, true));
+        assert!(muted.accepts("Signal", 1, true));
+
+        // 3. A priority app is kept even when rules 4 and 5 would drop it.
+        let priority = NotificationFilter {
+            priority_apps: vec!["Signal".to_string()],
+            focus_only: true,
+            min_urgency: 2,
+            ..capturing_filter()
+        };
+        assert!(priority.accepts("Signal", 0, false));
+        assert!(priority.accepts("SIGNAL", 0, false));
+        assert!(!priority.accepts("Slack", 0, false));
+
+        // 4. focus_only drops anything that arrives outside a focus interval.
+        let focus_only = NotificationFilter {
+            focus_only: true,
+            ..capturing_filter()
+        };
+        assert!(!focus_only.accepts("Slack", 2, false));
+        assert!(focus_only.accepts("Slack", 2, true));
+
+        // 5. Urgency below the floor is dropped; at or above it is kept.
+        let floor = NotificationFilter {
+            min_urgency: 1,
+            ..capturing_filter()
+        };
+        assert!(!floor.accepts("Slack", 0, true));
+        assert!(floor.accepts("Slack", 1, true));
+        assert!(floor.accepts("Slack", 2, true));
+
+        // 6. Otherwise keep.
+        assert!(capturing_filter().accepts("Slack", 0, false));
+    }
+
+    #[test]
+    fn capture_defaults_to_off_and_records_focus_context() {
+        let mut data = AppData::default();
+        assert!(!data.settings.notification_filter.enabled);
+        assert!(data
+            .capture_notification("Slack", "Standup", "In five minutes", 1, 500)
+            .is_none());
+        assert!(data.notifications.is_empty());
+
+        data.settings.notification_filter = capturing_filter();
+        let captured = data
+            .capture_notification("Slack", "Standup", "In five minutes", 1, 500)
+            .expect("an enabled filter with no rules keeps everything");
+        assert_eq!(captured.id, "notif-500-0");
+        assert_eq!(captured.app_name, "Slack");
+        assert_eq!(captured.urgency, 1);
+        assert_eq!(captured.received_at, 500);
+        assert!(!captured.during_focus);
+        assert!(!captured.triaged);
+
+        let mut focused = AppData::default();
+        focused.settings.notification_filter = capturing_filter();
+        running_focus(&mut focused);
+        let during = focused
+            .capture_notification("Slack", "Standup", "Now", 1, 1_000)
+            .expect("capture during focus");
+        assert!(during.during_focus);
+    }
+
+    #[test]
+    fn retention_keeps_the_newest_two_hundred_notifications() {
+        let mut data = AppData::default();
+        data.settings.notification_filter = capturing_filter();
+
+        for index in 0..(NOTIFICATION_RETENTION as i64 + 50) {
+            data.capture_notification("Slack", format!("Message {index}"), "", 1, index)
+                .expect("every notification passes the empty filter");
+        }
+
+        assert_eq!(data.notifications.len(), NOTIFICATION_RETENTION);
+        // Newest first: the last one captured leads, the oldest 50 are gone.
+        assert_eq!(data.notifications[0].summary, "Message 249");
+        assert_eq!(data.notifications[0].received_at, 249);
+        assert_eq!(
+            data.notifications[NOTIFICATION_RETENTION - 1].summary,
+            "Message 50"
+        );
+        assert!(data
+            .notifications
+            .iter()
+            .all(|notification| notification.received_at >= 50));
+    }
+
+    #[test]
+    fn notification_ids_stay_unique_within_a_millisecond() {
+        let mut data = AppData::default();
+        data.settings.notification_filter = capturing_filter();
+        let first = data.capture_notification("A", "one", "", 1, 42).unwrap();
+        let second = data.capture_notification("A", "two", "", 1, 42).unwrap();
+        assert_eq!(first.id, "notif-42-0");
+        assert_eq!(second.id, "notif-42-1");
+    }
+
+    #[test]
+    fn notification_triage_conversion_and_removal() {
+        let mut data = AppData::default();
+        data.settings.notification_filter = capturing_filter();
+        let captured = data
+            .capture_notification("Slack", "Review the PR", "body", 1, 10)
+            .unwrap();
+
+        assert!(data.set_notification_triaged(&captured.id, true));
+        assert!(data.notifications[0].triaged);
+        assert!(data.set_notification_triaged(&captured.id, false));
+        assert!(!data.notifications[0].triaged);
+        assert!(!data.set_notification_triaged("notif-missing", true));
+
+        assert!(data.delete_notification(&captured.id));
+        assert!(data.notifications.is_empty());
+        assert!(!data.delete_notification(&captured.id));
+
+        data.capture_notification("Slack", "Another", "", 1, 11)
+            .unwrap();
+        data.capture_notification("Slack", "And another", "", 1, 12)
+            .unwrap();
+        data.clear_notifications();
+        assert!(data.notifications.is_empty());
+    }
+
+    #[test]
+    fn urgency_above_the_specified_range_is_clamped() {
+        let mut data = AppData::default();
+        data.settings.notification_filter = capturing_filter();
+        let captured = data.capture_notification("A", "s", "b", 200, 1).unwrap();
+        assert_eq!(captured.urgency, MAX_URGENCY);
+
+        let sanitized = NotificationFilter {
+            min_urgency: 200,
+            ..capturing_filter()
+        }
+        .sanitized();
+        assert_eq!(sanitized.min_urgency, MAX_URGENCY);
+    }
+
+    #[test]
+    fn filter_sanitization_trims_and_deduplicates_app_lists() {
+        let sanitized = NotificationFilter {
+            muted_apps: vec![
+                "  Slack ".to_string(),
+                "slack".to_string(),
+                "   ".to_string(),
+                "Signal".to_string(),
+            ],
+            ..capturing_filter()
+        }
+        .sanitized();
+        assert_eq!(sanitized.muted_apps, vec!["Slack", "Signal"]);
+    }
+
+    #[test]
+    fn a_store_without_the_notification_fields_still_loads() {
+        // A pomodoro.json written before this feature existed: no
+        // `notifications` array and no `settings.notificationFilter`.
+        let legacy = r#"{
+            "settings": {
+                "focusMinutes": 30,
+                "shortBreakMinutes": 5,
+                "longBreakMinutes": 15,
+                "roundsBeforeLongBreak": 4,
+                "autoStartBreaks": true,
+                "autoStartFocus": false,
+                "notifications": true,
+                "sound": true,
+                "theme": "dark"
+            },
+            "timer": {
+                "phase": "focus",
+                "status": "idle",
+                "durationSeconds": 1800,
+                "remainingSeconds": 1800,
+                "startedAt": null,
+                "endsAt": null,
+                "activeTaskId": null,
+                "completedInCycle": 2
+            },
+            "tasks": [
+                {
+                    "id": "task-1",
+                    "title": "Existing work",
+                    "estimate": 3,
+                    "completedPomodoros": 1,
+                    "done": false,
+                    "createdAt": 100,
+                    "completedAt": null
+                }
+            ],
+            "interruptions": [
+                {
+                    "id": "interruption-1",
+                    "text": "Phone call",
+                    "category": "external",
+                    "capturedAt": 200,
+                    "handled": false,
+                    "taskId": "task-1"
+                }
+            ],
+            "sessions": [
+                {
+                    "id": "session-1",
+                    "phase": "focus",
+                    "taskId": "task-1",
+                    "taskTitle": "Existing work",
+                    "durationSeconds": 1800,
+                    "startedAt": 100,
+                    "endedAt": 1900,
+                    "outcome": "completed"
+                }
+            ]
+        }"#;
+
+        let data: AppData = serde_json::from_str(legacy).expect("an older store must still load");
+
+        // Existing tasks, interruptions and history survive untouched.
+        assert_eq!(data.tasks.len(), 1);
+        assert_eq!(data.tasks[0].title, "Existing work");
+        assert_eq!(data.tasks[0].completed_pomodoros, 1);
+        assert_eq!(data.interruptions.len(), 1);
+        assert_eq!(data.interruptions[0].text, "Phone call");
+        assert_eq!(data.sessions.len(), 1);
+        assert_eq!(data.sessions[0].outcome, SessionOutcome::Completed);
+        assert_eq!(data.settings.focus_minutes, 30);
+        assert_eq!(data.settings.theme, ThemePreference::Dark);
+        assert_eq!(data.timer.completed_in_cycle, 2);
+
+        // The new fields take their safe defaults: capture off, nothing filed.
+        assert!(data.notifications.is_empty());
+        assert_eq!(
+            data.settings.notification_filter,
+            NotificationFilter::default()
+        );
+        assert!(!data.settings.notification_filter.enabled);
+
+        // A partially upgraded store (filter present, notifications missing)
+        // also loads.
+        let partial = r#"{"settings":{"notificationFilter":{"enabled":true,"minUrgency":2}}}"#;
+        let data: AppData = serde_json::from_str(partial).expect("partial store must load");
+        assert!(data.settings.notification_filter.enabled);
+        assert_eq!(data.settings.notification_filter.min_urgency, 2);
+        assert!(data.settings.notification_filter.muted_apps.is_empty());
+        assert!(data.notifications.is_empty());
+        assert_eq!(data.settings.focus_minutes, 25);
+    }
+
+    #[test]
+    fn notification_serde_matches_the_typescript_contract() {
+        let mut data = AppData::default();
+        data.settings.notification_filter = NotificationFilter {
+            enabled: true,
+            min_urgency: 2,
+            muted_apps: vec!["Slack".to_string()],
+            priority_apps: vec!["Signal".to_string()],
+            focus_only: true,
+        };
+        data.capture_notification("Signal", "Alice", "See you at six", 2, 7)
+            .unwrap();
+
+        let value = serde_json::to_value(&data).unwrap();
+        let filter = &value["settings"]["notificationFilter"];
+        assert_eq!(filter["enabled"], true);
+        assert_eq!(filter["minUrgency"], 2);
+        assert_eq!(filter["mutedApps"][0], "Slack");
+        assert_eq!(filter["priorityApps"][0], "Signal");
+        assert_eq!(filter["focusOnly"], true);
+
+        let notification = &value["notifications"][0];
+        assert_eq!(notification["id"], "notif-7-0");
+        assert_eq!(notification["appName"], "Signal");
+        assert_eq!(notification["summary"], "Alice");
+        assert_eq!(notification["body"], "See you at six");
+        assert_eq!(notification["urgency"], 2);
+        assert_eq!(notification["receivedAt"], 7);
+        assert_eq!(notification["duringFocus"], false);
+        assert_eq!(notification["triaged"], false);
+
+        // Round trips without loss.
+        let restored: AppData = serde_json::from_value(value).unwrap();
+        assert_eq!(restored, data);
     }
 }
