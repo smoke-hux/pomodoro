@@ -87,6 +87,18 @@ Install project dependencies and run the checks:
     npm run build
     cargo test --manifest-path src-tauri/Cargo.toml
 
+Some checks need a real GNOME session — a session bus, a notification daemon,
+and `gsettings` — so they are marked `#[ignore]` and skipped by CI. Run them on
+an Ubuntu desktop:
+
+    cargo test --manifest-path src-tauri/Cargo.toml -- --ignored --nocapture
+
+They cover capture against the live bus, a notification arriving mid-focus
+being filed without disturbing the timer, Pomodoro's own alerts staying out of
+the inbox, banners being silenced and restored, and carrying a real
+`app.kipindi.timer` store across. None of them write to your live Pomodoro data
+or leave the desktop's banner setting changed.
+
 Run the desktop app in development:
 
     npm run tauri dev

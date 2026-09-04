@@ -149,3 +149,99 @@ mod tests {
         let _ = fs::remove_dir_all(directory);
     }
 }
+
+/// The pull request's second manual check: carrying a real Kipindi store across
+/// to the Pomodoro bundle id, as the README describes.
+///
+/// `#[ignore]`d because it reads the machine's actual
+/// `~/.local/share/app.kipindi.timer/kipindi.json`, which CI does not have. It
+/// never writes to either real directory — the copy goes to a temporary one.
+/// Run it with `cargo test -- --ignored --nocapture kipindi`.
+#[cfg(test)]
+mod kipindi_migration {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires a real Kipindi store in the user's data directory"]
+    fn a_real_kipindi_store_survives_the_move_to_pomodoro() {
+        let home = std::env::var("HOME").expect("HOME must be set");
+        let old = PathBuf::from(&home).join(".local/share/app.kipindi.timer/kipindi.json");
+        assert!(
+            old.exists(),
+            "no Kipindi store at {} — nothing to migrate",
+            old.display()
+        );
+        let before: serde_json::Value =
+            serde_json::from_slice(&fs::read(&old).expect("the old store must be readable"))
+                .expect("the old store must be valid JSON");
+
+        // The README's `cp`, into a directory of our own so the real Pomodoro
+        // store is never touched.
+        let directory = std::env::temp_dir().join(format!(
+            "pomodoro-migration-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_millis()
+        ));
+        fs::create_dir_all(&directory).expect("the destination must be creatable");
+        let store = Store::new(&directory);
+        fs::copy(&old, &store.path).expect("the copy must succeed");
+
+        let data = store.load().expect("the migrated store must load");
+
+        // Tasks, settings and history all came across intact.
+        let tasks = before["tasks"].as_array().expect("tasks array");
+        assert_eq!(data.tasks.len(), tasks.len(), "every task survived");
+        for (loaded, original) in data.tasks.iter().zip(tasks) {
+            assert_eq!(loaded.id, original["id"].as_str().unwrap());
+            assert_eq!(loaded.title, original["title"].as_str().unwrap());
+            assert_eq!(
+                u64::from(loaded.completed_pomodoros),
+                original["completedPomodoros"].as_u64().unwrap()
+            );
+        }
+        let sessions = before["sessions"].as_array().expect("sessions array");
+        assert_eq!(
+            data.sessions.len(),
+            sessions.len(),
+            "every session survived"
+        );
+        for (loaded, original) in data.sessions.iter().zip(sessions) {
+            assert_eq!(loaded.id, original["id"].as_str().unwrap());
+            assert_eq!(loaded.started_at, original["startedAt"].as_i64().unwrap());
+        }
+        assert_eq!(
+            u64::from(data.settings.focus_minutes),
+            before["settings"]["focusMinutes"].as_u64().unwrap()
+        );
+        assert_eq!(
+            data.timer.active_task_id.as_deref(),
+            before["timer"]["activeTaskId"].as_str()
+        );
+
+        // Fields the Kipindi build never wrote take their defaults, and capture
+        // stays off rather than switching itself on during an upgrade.
+        assert!(
+            before["notifications"].is_null(),
+            "precondition: an old store"
+        );
+        assert!(data.notifications.is_empty());
+        assert!(!data.settings.notification_filter.enabled);
+        assert!(!data.settings.silence_banners_during_focus);
+        assert_eq!(data.banner_restore, None);
+
+        // The copied file arrives with the shell's umask; the first save is what
+        // tightens it.
+        store.save(&data).expect("the migrated store must save");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&store.path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, FILE_MODE, "the migrated store is tightened on save");
+        }
+        let reloaded = store.load().expect("the saved store must load");
+        assert_eq!(reloaded.tasks, data.tasks);
+        assert_eq!(reloaded.sessions, data.sessions);
+
+        let _ = fs::remove_dir_all(directory);
+    }
+}
