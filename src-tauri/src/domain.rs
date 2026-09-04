@@ -53,6 +53,25 @@ pub enum ThemePreference {
     Dark,
 }
 
+/// How the remaining time is drawn. Each face answers "how much is left?" in a
+/// different way — read, proportion, count, glance, or words — rather than being
+/// a decorative skin over the same numerals.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TimerFace {
+    #[default]
+    Digits,
+    Ring,
+    Pips,
+    Bar,
+    Words,
+    Analog,
+    Vessel,
+    Arc,
+    Blocks,
+    Orbit,
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum InterruptionCategory {
@@ -142,6 +161,7 @@ pub struct Settings {
     pub notifications: bool,
     pub sound: bool,
     pub theme: ThemePreference,
+    pub timer_face: TimerFace,
     pub notification_filter: NotificationFilter,
 }
 
@@ -157,6 +177,7 @@ impl Default for Settings {
             notifications: true,
             sound: true,
             theme: ThemePreference::System,
+            timer_face: TimerFace::Digits,
             notification_filter: NotificationFilter::default(),
         }
     }

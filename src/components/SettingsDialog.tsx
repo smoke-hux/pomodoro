@@ -1,6 +1,27 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
-import type { NotificationFilter, Settings } from "../types";
+import type { NotificationFilter, Settings, TimerFace as TimerFaceId } from "../types";
+import { TimerFace } from "./TimerFace";
+
+/**
+ * Previewed at 15:00 of a 25:00 interval so every face shows a partial state —
+ * a full or empty ring tells the user nothing about how the face behaves.
+ */
+const PREVIEW_DURATION = 25 * 60;
+const PREVIEW_REMAINING = 15 * 60;
+
+const TIMER_FACES: { id: TimerFaceId; name: string; note: string }[] = [
+  { id: "digits", name: "Digits", note: "Exact to the second" },
+  { id: "ring", name: "Ring", note: "Proportion at a glance" },
+  { id: "arc", name: "Arc", note: "A half-circle gauge" },
+  { id: "analog", name: "Analog", note: "A wind-up kitchen dial" },
+  { id: "orbit", name: "Orbit", note: "One dot, one revolution" },
+  { id: "bar", name: "Bar", note: "A single depleting line" },
+  { id: "blocks", name: "Blocks", note: "Twelve fixed segments" },
+  { id: "pips", name: "Pips", note: "One mark per minute" },
+  { id: "vessel", name: "Vessel", note: "A quantity draining" },
+  { id: "words", name: "Words", note: "No numerals at all" },
+];
 
 interface SettingsDialogProps {
   open: boolean;
@@ -369,6 +390,44 @@ export function SettingsDialog({
                   <option value="light">Light</option>
                   <option value="dark">Dark</option>
                 </select>
+              </div>
+
+              <div className="setting-stack">
+                <span className="setting-stack-label" id="timer-face-label">
+                  Timer face
+                </span>
+                <p className="setting-hint">
+                  How the remaining time is drawn. Each one trades precision for calm
+                  differently.
+                </p>
+                <div
+                  className="face-picker"
+                  role="radiogroup"
+                  aria-labelledby="timer-face-label"
+                >
+                  {TIMER_FACES.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={draft.timerFace === option.id}
+                      className={`face-option${draft.timerFace === option.id ? " selected" : ""}`}
+                      onClick={() => setDraft({ ...draft, timerFace: option.id })}
+                    >
+                      <span className="face-preview" aria-hidden="true">
+                        <TimerFace
+                          face={option.id}
+                          phase="focus"
+                          remainingSeconds={PREVIEW_REMAINING}
+                          durationSeconds={PREVIEW_DURATION}
+                          phaseLabel="Focus"
+                        />
+                      </span>
+                      <span className="face-name">{option.name}</span>
+                      <span className="face-note">{option.note}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             </fieldset>
 

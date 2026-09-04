@@ -776,7 +776,7 @@ textarea::placeholder {
   text-align: center;
 }
 
-.timer-digits {
+.face-digits {
   display: block;
   max-width: 100%;
   color: var(--text);
@@ -1446,7 +1446,7 @@ input[type="radio"] {
     padding-top: 10px;
   }
 
-  .timer-digits {
+  .face-digits {
     font-size: clamp(58px, 19vw, 92px);
   }
 
@@ -1578,7 +1578,7 @@ input[type="radio"] {
     padding-bottom: 10px;
   }
 
-  .timer-digits {
+  .face-digits {
     font-size: clamp(58px, 16vh, 88px);
   }
 
@@ -1665,7 +1665,7 @@ input[type="radio"] {
    primary button. Glanced at from across a desk, a stalled session read as a
    working one. The clock now softens and breathes, and the progress fill goes
    flat, so the state is legible without reading anything. */
-.status-paused .timer-digits {
+.status-paused .timer-face {
   color: var(--text-muted);
   animation: paused-breath 2400ms ease-in-out infinite;
 }
@@ -1699,7 +1699,7 @@ input[type="radio"] {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .status-paused .timer-digits {
+  .status-paused .timer-face {
     animation: none;
     opacity: 0.72;
   }
@@ -2047,5 +2047,471 @@ input[type="radio"] {
   .notice-during,
   .app-chips li {
     border-color: ButtonBorder;
+  }
+}
+
+/* ── Timer faces ────────────────────────────────────────────────────────────
+   Five instruments for one reading, ordered by how much precision each gives
+   up: digits (exact) → ring / bar (proportion) → pips (countable) → words
+   (ambient). Each face lets one element dominate and demotes the rest; a face
+   where everything competes is just decoration. All of them inherit the muted
+   treatment under .status-paused via .timer-face. */
+.timer-face {
+  display: block;
+  max-width: 100%;
+  color: var(--text);
+}
+
+/* Ring — proportion read radially. The readout sits inside so the arc, not the
+   number, is what the eye lands on first. */
+.face-ring {
+  position: relative;
+  display: grid;
+  place-items: center;
+  inline-size: clamp(180px, 30vh, 260px);
+  aspect-ratio: 1;
+  margin-inline: auto;
+}
+
+.face-ring svg {
+  inline-size: 100%;
+  block-size: 100%;
+  /* Start the depletion at twelve o'clock rather than three. */
+  rotate: -90deg;
+}
+
+.ring-track,
+.ring-progress {
+  fill: none;
+  stroke-width: 6;
+  stroke-linecap: round;
+}
+
+.ring-track {
+  stroke: var(--divider);
+}
+
+.ring-progress {
+  stroke: var(--phase-accent, var(--focus));
+  transition: stroke-dashoffset 160ms linear;
+}
+
+.ring-readout {
+  position: absolute;
+  font-family: "Ubuntu Mono", "Liberation Mono", monospace;
+  font-size: clamp(30px, 6vh, 44px);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+}
+
+/* Bar — the same proportion read linearly. Deliberately thick: this is the
+   clock, not the thin secondary track that sits under the other faces. */
+.face-bar {
+  display: grid;
+  gap: 14px;
+  inline-size: min(420px, 84%);
+  margin-inline: auto;
+}
+
+.bar-shell {
+  display: block;
+  block-size: 26px;
+  overflow: hidden;
+  background: var(--divider);
+  border-radius: var(--radius-sm);
+}
+
+.bar-fill {
+  display: block;
+  block-size: 100%;
+  background: var(--phase-accent, var(--focus));
+  transition: inline-size 160ms linear;
+}
+
+.bar-readout {
+  font-family: "Ubuntu Mono", "Liberation Mono", monospace;
+  font-size: clamp(28px, 5vh, 40px);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+}
+
+/* Pips — one mark per minute, so the remainder can be counted rather than
+   read. */
+.face-pips {
+  display: grid;
+  gap: 14px;
+  justify-items: center;
+}
+
+.pip-grid {
+  display: flex;
+  max-inline-size: min(420px, 86%);
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 7px;
+}
+
+.pip {
+  inline-size: 13px;
+  block-size: 13px;
+  border: 1px solid var(--divider);
+  border-radius: 2px;
+}
+
+.pip.lit {
+  background: var(--phase-accent, var(--focus));
+  border-color: var(--phase-accent, var(--focus));
+}
+
+.pip-readout {
+  font-family: "Ubuntu Mono", "Liberation Mono", monospace;
+  font-size: clamp(24px, 4.5vh, 34px);
+  font-variant-numeric: tabular-nums;
+}
+
+.pip-readout em {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+/* Words — no numerals at all. Precision is what makes a clock urgent, so the
+   calmest face simply declines to be precise. */
+.face-words {
+  max-inline-size: 16ch;
+  margin-inline: auto;
+  font-size: clamp(30px, 5.4vw, 52px);
+  font-weight: 300;
+  letter-spacing: -0.02em;
+  line-height: 1.16;
+  text-wrap: balance;
+}
+
+.status-paused .ring-progress,
+.status-paused .bar-fill,
+.status-paused .pip.lit {
+  background: var(--text-muted);
+  stroke: var(--text-muted);
+  border-color: var(--text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ring-progress,
+  .bar-fill {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .pip.lit,
+  .bar-fill {
+    background: Highlight;
+    border-color: Highlight;
+  }
+
+  .ring-progress {
+    stroke: Highlight;
+  }
+}
+
+/* ── Timer face picker ──────────────────────────────────────────────────────
+   Each option renders the real face component at 15:00 of a 25:00 interval, so
+   the choice is made by looking rather than by reading a label and guessing.
+   The previews are scaled down with a transform on a fixed-height stage, which
+   keeps them from dragging the dialog's layout around. */
+.setting-stack {
+  display: grid;
+  gap: 6px;
+  padding: 12px 0 4px;
+}
+
+.setting-stack-label {
+  font-weight: 600;
+}
+
+.setting-hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.face-picker {
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+}
+
+.face-option {
+  display: grid;
+  gap: 2px;
+  padding: 10px 8px;
+  background: transparent;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  text-align: center;
+}
+
+.face-option:hover {
+  background: var(--surface-hover);
+}
+
+.face-option.selected {
+  border-color: var(--focus);
+  box-shadow: inset 0 0 0 1px var(--focus);
+}
+
+.face-preview {
+  display: grid;
+  block-size: 62px;
+  place-items: center;
+  overflow: hidden;
+  /* The faces are sized for the main stage; shrink the whole thing rather than
+     re-specifying every font size and dimension for a second context. */
+  container-type: inline-size;
+}
+
+.face-preview > .timer-face {
+  scale: 0.34;
+}
+
+.face-preview > .face-ring {
+  scale: 0.28;
+}
+
+.face-preview > .face-words {
+  scale: 0.42;
+}
+
+.face-preview > .face-analog,
+.face-preview > .face-orbit {
+  scale: 0.26;
+}
+
+.face-preview > .face-vessel {
+  scale: 0.3;
+}
+
+.face-preview > .face-arc {
+  scale: 0.38;
+}
+
+.face-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.face-note {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+@media (forced-colors: active) {
+  .face-option.selected {
+    border-width: 2px;
+    outline: 2px solid Highlight;
+  }
+}
+
+/* ── Timer faces, second set ────────────────────────────────────────────────
+   Analog, vessel, arc, blocks and orbit. Same rule as the first set: one
+   element dominates, everything else is demoted to a muted readout. Gauge
+   guidance is explicit that a dial without a figure beside it is not
+   sufficient, so each keeps its clock. */
+.face-analog {
+  inline-size: clamp(190px, 32vh, 268px);
+  aspect-ratio: 1;
+  margin-inline: auto;
+}
+
+.face-analog svg,
+.face-orbit svg {
+  inline-size: 100%;
+  block-size: 100%;
+}
+
+.dial-plate {
+  fill: var(--surface);
+  stroke: var(--divider);
+  stroke-width: 1.5;
+}
+
+.dial-tick {
+  stroke: var(--divider);
+  stroke-width: 1.5;
+}
+
+.dial-tick.major {
+  stroke: var(--text-muted);
+  stroke-width: 2.5;
+}
+
+.dial-wedge {
+  fill: var(--phase-accent, var(--focus));
+  opacity: 0.9;
+}
+
+.dial-hand {
+  stroke: var(--text);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+
+.dial-pin {
+  fill: var(--text);
+}
+
+/* Vessel — a quantity draining, not a number decrementing. */
+.face-vessel {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+}
+
+.vessel-shell {
+  display: flex;
+  align-items: flex-end;
+  inline-size: clamp(84px, 13vh, 116px);
+  block-size: clamp(150px, 26vh, 220px);
+  overflow: hidden;
+  border: 2px solid var(--control-border);
+  border-radius: 12px 12px 22px 22px;
+}
+
+.vessel-fill {
+  inline-size: 100%;
+  background: var(--phase-accent, var(--focus));
+  border-radius: 0 0 20px 20px;
+  transition: block-size 160ms linear;
+}
+
+/* Arc — half the ink of the ring; the readout fills the hollow. */
+.face-arc {
+  position: relative;
+  display: grid;
+  inline-size: min(400px, 86%);
+  margin-inline: auto;
+}
+
+.face-arc svg {
+  inline-size: 100%;
+  block-size: auto;
+}
+
+.arc-track,
+.arc-progress {
+  fill: none;
+  stroke-width: 8;
+  stroke-linecap: round;
+}
+
+.arc-track {
+  stroke: var(--divider);
+}
+
+.arc-progress {
+  stroke: var(--phase-accent, var(--focus));
+  transition: stroke-dashoffset 160ms linear;
+}
+
+.arc-readout {
+  position: absolute;
+  inset-block-end: 0;
+  inline-size: 100%;
+  font-family: "Ubuntu Mono", "Liberation Mono", monospace;
+  font-size: clamp(28px, 5vh, 42px);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  text-align: center;
+}
+
+/* Blocks — twelve proportional segments, so every interval length reads at the
+   same glance-weight. */
+.face-blocks {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.block-row {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 6px;
+  inline-size: min(430px, 62vw);
+}
+
+.block {
+  min-inline-size: 0;
+  block-size: 44px;
+  background: var(--divider);
+  border-radius: 3px;
+}
+
+.block.lit {
+  background: var(--phase-accent, var(--focus));
+}
+
+/* Orbit — position alone carries the reading. */
+.face-orbit {
+  display: grid;
+  justify-items: center;
+  gap: 22px;
+  inline-size: clamp(180px, 30vh, 250px);
+  margin-inline: auto;
+}
+
+.orbit-path {
+  fill: none;
+  stroke: var(--divider);
+  stroke-width: 1.5;
+}
+
+.orbit-dot {
+  fill: var(--phase-accent, var(--focus));
+}
+
+.block-readout,
+.vessel-readout,
+.orbit-readout {
+  font-family: "Ubuntu Mono", "Liberation Mono", monospace;
+  font-size: clamp(24px, 4.4vh, 34px);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+}
+
+.status-paused .dial-wedge,
+.status-paused .vessel-fill,
+.status-paused .block.lit,
+.status-paused .orbit-dot {
+  background: var(--text-muted);
+  fill: var(--text-muted);
+}
+
+.status-paused .arc-progress {
+  stroke: var(--text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vessel-fill,
+  .arc-progress {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .dial-wedge,
+  .orbit-dot {
+    fill: Highlight;
+  }
+
+  .arc-progress {
+    stroke: Highlight;
+  }
+
+  .vessel-fill,
+  .block.lit {
+    background: Highlight;
   }
 }

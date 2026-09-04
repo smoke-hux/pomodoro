@@ -3,6 +3,23 @@ export type TimerStatus = "idle" | "running" | "paused";
 export type SessionOutcome = "completed" | "skipped" | "abandoned";
 export type ThemePreference = "system" | "light" | "dark";
 
+/**
+ * How the remaining time is drawn. Each face answers "how much is left?" in a
+ * different way — read, proportion, count, glance, or words — rather than being
+ * a decorative skin over the same numerals.
+ */
+export type TimerFace =
+  | "digits"
+  | "ring"
+  | "pips"
+  | "bar"
+  | "words"
+  | "analog"
+  | "vessel"
+  | "arc"
+  | "blocks"
+  | "orbit";
+
 export interface DesktopNotification {
   id: string;
   appName: string;
@@ -32,6 +49,7 @@ export interface Settings {
   notifications: boolean;
   sound: boolean;
   theme: ThemePreference;
+  timerFace: TimerFace;
   notificationFilter: NotificationFilter;
 }
 
@@ -96,6 +114,7 @@ export const defaultSnapshot: AppSnapshot = {
     notifications: true,
     sound: true,
     theme: "system",
+    timerFace: "digits",
     // Capture is opt-in. Nothing is watched until the user says so.
     notificationFilter: {
       enabled: false,

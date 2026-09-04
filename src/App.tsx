@@ -406,6 +406,7 @@ export default function App() {
             timer={snapshot.timer}
             activeTask={activeTask}
             roundsBeforeLongBreak={snapshot.settings.roundsBeforeLongBreak}
+            face={snapshot.settings.timerFace}
             onSetPhase={selectPhase}
             onToggleTimer={() => void run(api.toggleTimer)}
             onReset={() => void run(api.resetTimer, "Interval reset.")}

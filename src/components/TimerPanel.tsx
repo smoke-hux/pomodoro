@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Pause, Play, RotateCcw, SkipForward } from "lucide-react";
-import type { FocusTask, Phase, TimerState } from "../types";
+import type { FocusTask, Phase, TimerFace as TimerFaceId, TimerState } from "../types";
+import { TimerFace } from "./TimerFace";
 
 const phaseLabels: Record<Phase, string> = {
   focus: "Focus",
@@ -12,6 +13,7 @@ interface TimerPanelProps {
   timer: TimerState;
   activeTask: FocusTask | null;
   roundsBeforeLongBreak: number;
+  face: TimerFaceId;
   onSetPhase: (phase: Phase) => void;
   onToggleTimer: () => void;
   onReset: () => void;
@@ -19,17 +21,11 @@ interface TimerPanelProps {
   onAddTask: () => void;
 }
 
-function countdown(seconds: number) {
-  const safe = Math.max(0, Math.ceil(seconds));
-  return `${Math.floor(safe / 60).toString().padStart(2, "0")}:${(safe % 60)
-    .toString()
-    .padStart(2, "0")}`;
-}
-
 export function TimerPanel({
   timer,
   activeTask,
   roundsBeforeLongBreak,
+  face,
   onSetPhase,
   onToggleTimer,
   onReset,
@@ -112,22 +108,25 @@ export function TimerPanel({
         <h1 id="timer-heading" className="visually-hidden">
           {phaseLabels[timer.phase]} timer
         </h1>
-        <output
-          className="timer-digits"
-          aria-label={`${Math.ceil(timer.remainingSeconds / 60)} minutes remaining`}
-        >
-          {countdown(timer.remainingSeconds)}
-        </output>
-        <div
-          className="progress-track"
-          role="progressbar"
-          aria-label={`${phaseLabels[timer.phase]} progress`}
-          aria-valuemin={0}
-          aria-valuemax={timer.durationSeconds}
-          aria-valuenow={Math.round(timer.durationSeconds - timer.remainingSeconds)}
-        >
-          <span style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} />
-        </div>
+        <TimerFace
+          face={face}
+          phase={timer.phase}
+          remainingSeconds={timer.remainingSeconds}
+          durationSeconds={timer.durationSeconds}
+          phaseLabel={phaseLabels[timer.phase]}
+        />
+        {face === "ring" || face === "bar" ? null : (
+          <div
+            className="progress-track"
+            role="progressbar"
+            aria-label={`${phaseLabels[timer.phase]} progress`}
+            aria-valuemin={0}
+            aria-valuemax={timer.durationSeconds}
+            aria-valuenow={Math.round(timer.durationSeconds - timer.remainingSeconds)}
+          >
+            <span style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} />
+          </div>
+        )}
 
         <div className="session-task">
           {timer.phase === "focus" ? (
