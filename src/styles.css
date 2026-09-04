@@ -26,8 +26,8 @@
   --focus-ring: #98452b;
   --shadow-menu: 0 2px 8px rgb(37 33 29 / 14%);
 
-  --toolbar-height: 48px;
-  --sidebar-width: 288px;
+  --toolbar-height: 52px;
+  --sidebar-width: 256px;
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
@@ -101,6 +101,11 @@ body,
   margin: 0;
 }
 
+html,
+body {
+  min-height: 100dvh;
+}
+
 body {
   overflow: hidden;
   background: var(--canvas);
@@ -121,6 +126,21 @@ button,
 summary,
 select {
   cursor: pointer;
+}
+
+button,
+summary {
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    opacity 140ms ease,
+    transform 100ms ease;
+}
+
+button:active:not(:disabled),
+summary:active {
+  transform: translateY(1px);
 }
 
 button:disabled,
@@ -192,7 +212,7 @@ summary:focus-visible,
   gap: 8px;
   min-width: 0;
   min-height: var(--toolbar-height);
-  padding: 4px 8px 4px 12px;
+  padding: 4px 10px 4px 16px;
   background: var(--surface);
   border-bottom: 1px solid var(--divider);
 }
@@ -208,7 +228,7 @@ summary:focus-visible,
 
 .app-name {
   flex: 0 0 auto;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 650;
   letter-spacing: -0.01em;
 }
@@ -801,9 +821,11 @@ textarea::placeholder {
 
 .progress-track > span {
   display: block;
+  width: 100%;
   height: 100%;
   background: var(--phase-accent);
-  transition: width 160ms linear;
+  transform-origin: left center;
+  transition: transform 160ms linear;
 }
 
 .session-task {
@@ -1109,7 +1131,7 @@ kbd {
 
 .dialog {
   width: min(100%, 480px);
-  max-height: calc(100vh - 48px);
+  max-height: calc(100dvh - 48px);
   overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--divider);
@@ -1510,7 +1532,14 @@ input[type="radio"] {
   }
 
   .dialog {
-    max-height: calc(100vh - 20px);
+    max-height: calc(100dvh - 20px);
+  }
+
+  .icon-button,
+  .row-menu > summary,
+  .estimate-stepper button {
+    min-width: 44px;
+    min-height: 44px;
   }
 
   .capture-dialog {
@@ -1663,25 +1692,15 @@ input[type="radio"] {
 /* ── Paused state ───────────────────────────────────────────────────────────
    A paused timer used to differ from a running one only by the word on the
    primary button. Glanced at from across a desk, a stalled session read as a
-   working one. The clock now softens and breathes, and the progress fill goes
-   flat, so the state is legible without reading anything. */
+   working one. The clock now settles into a quiet muted state and the progress
+   fill goes flat, so the state is legible without perpetual motion. */
 .status-paused .timer-face {
   color: var(--text-muted);
-  animation: paused-breath 2400ms ease-in-out infinite;
+  opacity: 0.72;
 }
 
 .status-paused .progress-track > span {
   background: var(--text-muted);
-}
-
-@keyframes paused-breath {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.62;
-  }
 }
 
 /* ── Destructive confirmation ───────────────────────────────────────────────
@@ -2153,9 +2172,11 @@ input[type="radio"] {
 
 .bar-fill {
   display: block;
+  inline-size: 100%;
   block-size: 100%;
   background: var(--phase-accent, var(--focus));
-  transition: inline-size 160ms linear;
+  transform-origin: left center;
+  transition: transform 160ms linear;
 }
 
 .bar-readout {
@@ -2411,9 +2432,11 @@ input[type="radio"] {
 
 .vessel-fill {
   inline-size: 100%;
+  block-size: 100%;
   background: var(--phase-accent, var(--focus));
   border-radius: 0 0 20px 20px;
-  transition: block-size 160ms linear;
+  transform-origin: center bottom;
+  transition: transform 160ms linear;
 }
 
 /* Arc — half the ink of the ring; the readout fills the hollow. */

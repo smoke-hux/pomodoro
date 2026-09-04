@@ -136,7 +136,10 @@ export function TimerFace({
     return (
       <output className="timer-face face-bar" aria-label={label}>
         <span className="bar-shell" aria-hidden="true">
-          <span className="bar-fill" style={{ inlineSize: `${(1 - fraction) * 100}%` }} />
+          <span
+            className="bar-fill"
+            style={{ transform: `scaleX(${1 - fraction})` }}
+          />
         </span>
         <span className="bar-readout" aria-hidden="true">
           {clockText(remainingSeconds)}
@@ -207,7 +210,10 @@ export function TimerFace({
     return (
       <output className="timer-face face-vessel" aria-label={label}>
         <span className="vessel-shell" aria-hidden="true">
-          <span className="vessel-fill" style={{ blockSize: `${(1 - fraction) * 100}%` }} />
+          <span
+            className="vessel-fill"
+            style={{ transform: `scaleY(${1 - fraction})` }}
+          />
         </span>
         <span className="vessel-readout" aria-hidden="true">
           {clockText(remainingSeconds)}

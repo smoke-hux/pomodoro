@@ -72,15 +72,15 @@ describe("ring face", () => {
 });
 
 describe("bar face", () => {
-  it("sizes the fill to the time remaining, not elapsed", () => {
+  it("scales the fill to the time remaining, not elapsed", () => {
     const { container } = renderFace("bar");
     const fill = container.querySelector<HTMLElement>(".bar-fill");
-    expect(fill?.style.inlineSize).toBe("60%");
+    expect(fill?.style.transform).toBe("scaleX(0.6)");
   });
 
   it("does not go negative past expiry", () => {
     const { container } = renderFace("bar", 0);
-    expect(container.querySelector<HTMLElement>(".bar-fill")?.style.inlineSize).toBe("0%");
+    expect(container.querySelector<HTMLElement>(".bar-fill")?.style.transform).toBe("scaleX(0)");
   });
 });
 
@@ -142,12 +142,16 @@ describe("analog face", () => {
 describe("vessel face", () => {
   it("drains to the remaining fraction", () => {
     const { container } = renderFace("vessel");
-    expect(container.querySelector<HTMLElement>(".vessel-fill")?.style.blockSize).toBe("60%");
+    expect(container.querySelector<HTMLElement>(".vessel-fill")?.style.transform).toBe(
+      "scaleY(0.6)",
+    );
   });
 
   it("empties completely at expiry", () => {
     const { container } = renderFace("vessel", 0);
-    expect(container.querySelector<HTMLElement>(".vessel-fill")?.style.blockSize).toBe("0%");
+    expect(container.querySelector<HTMLElement>(".vessel-fill")?.style.transform).toBe(
+      "scaleY(0)",
+    );
   });
 });
 

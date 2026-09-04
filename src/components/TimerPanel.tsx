@@ -124,7 +124,11 @@ export function TimerPanel({
             aria-valuemax={timer.durationSeconds}
             aria-valuenow={Math.round(timer.durationSeconds - timer.remainingSeconds)}
           >
-            <span style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} />
+            <span
+              style={{
+                transform: `scaleX(${Math.min(100, Math.max(0, progress)) / 100})`,
+              }}
+            />
           </div>
         )}
 
