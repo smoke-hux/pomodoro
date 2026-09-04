@@ -1,20 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  AlertTriangle,
   Check,
   CheckCircle2,
   Circle,
+  ListChecks,
   MoreHorizontal,
   Plus,
   SlidersHorizontal,
   Trash2,
   Undo2,
 } from "lucide-react";
-import type { DesktopNotification } from "../types";
+import type { CaptureStatus, DesktopNotification } from "../types";
 import { formatRelativeTime } from "../lib/metrics";
 
 interface NotificationInboxProps {
   notifications: DesktopNotification[];
   captureEnabled: boolean;
+  captureStatus: CaptureStatus;
   onTriage: (id: string, triaged: boolean) => void;
   onConvert: (id: string) => void;
   onDelete: (id: string) => void;
@@ -136,20 +139,29 @@ function NotificationRow({
           </div>
         ) : (
           <div className="menu-popover notice-menu">
-            <button
-              type="button"
-              // The task is named from the summary, so a notification without
-              // one has nothing to become.
-              disabled={item.summary.trim() === ""}
-              title={
-                item.summary.trim() === ""
-                  ? "This notification has no summary to name a task"
-                  : undefined
-              }
-              onClick={() => onConvert(item.id)}
-            >
-              <Plus aria-hidden="true" size={15} /> Turn into task
-            </button>
+            {item.taskId ? (
+              // Already converted. Showing it as still available invited a
+              // second click and a second identical task; the backend now
+              // refuses to make one, and the menu says so before the click.
+              <button type="button" disabled title="This notification is already on the task list">
+                <ListChecks aria-hidden="true" size={15} /> Already a task
+              </button>
+            ) : (
+              <button
+                type="button"
+                // The task is named from the summary, so a notification without
+                // one has nothing to become.
+                disabled={item.summary.trim() === ""}
+                title={
+                  item.summary.trim() === ""
+                    ? "This notification has no summary to name a task"
+                    : undefined
+                }
+                onClick={() => onConvert(item.id)}
+              >
+                <Plus aria-hidden="true" size={15} /> Turn into task
+              </button>
+            )}
             <button type="button" onClick={() => onTriage(item.id, !item.triaged)}>
               {item.triaged ? (
                 <>
@@ -174,6 +186,7 @@ function NotificationRow({
 export function NotificationInbox({
   notifications,
   captureEnabled,
+  captureStatus,
   onTriage,
   onConvert,
   onDelete,
@@ -248,11 +261,21 @@ export function NotificationInbox({
         role={pending.length > 0 ? "list" : undefined}
         aria-label={pending.length > 0 ? "Captured notifications" : undefined}
       >
+        {captureEnabled && captureStatus.state === "failed" && (
+          <p className="capture-status warning" role="status">
+            <AlertTriangle aria-hidden="true" size={15} />
+            <span>
+              Capture is on but nothing is being watched
+              {captureStatus.detail ? `: ${captureStatus.detail}` : "."}
+            </span>
+          </p>
+        )}
         {pending.length === 0 ? (
           captureEnabled ? (
             <p className="empty-copy">
               Nothing captured yet. Notifications from other apps will be filed
-              here for review after focus.
+              here for review after focus. Capture files a copy; it does not stop
+              the banner appearing.
             </p>
           ) : (
             <p className="empty-copy">

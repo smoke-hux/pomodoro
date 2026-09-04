@@ -11,6 +11,34 @@ pub const MAX_URGENCY: u8 = 2;
 /// bound.
 pub const NOTIFICATION_RETENTION: usize = 200;
 
+/// Upper bounds on stored notification text. A sender can put an arbitrarily
+/// long string in any of these fields; without a cap one hostile or merely
+/// careless app could grow the local store without limit. The limits are far
+/// above what a real notification uses, so ordinary text is never touched.
+pub const MAX_APP_NAME_CHARS: usize = 128;
+pub const MAX_SUMMARY_CHARS: usize = 512;
+pub const MAX_BODY_CHARS: usize = 4_096;
+
+/// Names Pomodoro's own boundary notifications arrive under. They are dropped
+/// before the filter runs, so turning capture on cannot fill the inbox with the
+/// app's own "Focus complete" messages.
+const SELF_APP_NAMES: &[&str] = &["pomodoro", "app.pomodoro.timer"];
+
+/// True when a notification is one Pomodoro itself sent.
+pub fn is_self_notification(app_name: &str) -> bool {
+    let name = app_name.trim().to_lowercase();
+    SELF_APP_NAMES.contains(&name.as_str())
+}
+
+/// Trims a sender-supplied string to `limit` characters, respecting character
+/// boundaries so a truncated multi-byte character cannot corrupt the store.
+fn truncate_chars(text: String, limit: usize) -> String {
+    match text.char_indices().nth(limit) {
+        Some((byte_index, _)) => text[..byte_index].to_owned(),
+        None => text,
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Phase {
@@ -97,6 +125,73 @@ pub struct DesktopNotification {
     pub received_at: i64,
     pub during_focus: bool,
     pub triaged: bool,
+    /// The `replaces_id` the sender passed to `Notify`. Non-zero means the call
+    /// updates a notification the sender posted earlier, so the update lands on
+    /// this record instead of adding another row.
+    pub replaces_id: u32,
+    /// The task this notification was turned into, if any. Set once so a second
+    /// "Turn into task" on the same row cannot create a duplicate.
+    pub task_id: Option<String>,
+}
+
+/// Whether the notification monitor is actually running.
+///
+/// Capture can be switched on in settings and still fail to start — the session
+/// bus may refuse `BecomeMonitor`, or there may be no session bus at all. The
+/// UI reads this rather than the settings toggle, so it can never claim to be
+/// watching when nothing is.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CaptureState {
+    /// The user has not turned capture on.
+    #[default]
+    Off,
+    /// Capture is on and the monitor thread is coming up.
+    Starting,
+    /// The monitor is attached to the session bus.
+    Active,
+    /// Capture is on but the monitor could not run. `detail` says why.
+    Failed,
+}
+
+/// Runtime health of notification capture, reported to the UI alongside the
+/// settings that requested it.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CaptureStatus {
+    pub state: CaptureState,
+    /// A D-Bus error message. Never contains notification text.
+    pub detail: String,
+}
+
+impl CaptureStatus {
+    pub fn off() -> Self {
+        Self {
+            state: CaptureState::Off,
+            detail: String::new(),
+        }
+    }
+
+    pub fn starting() -> Self {
+        Self {
+            state: CaptureState::Starting,
+            detail: String::new(),
+        }
+    }
+
+    pub fn active() -> Self {
+        Self {
+            state: CaptureState::Active,
+            detail: String::new(),
+        }
+    }
+
+    pub fn failed(detail: impl Into<String>) -> Self {
+        Self {
+            state: CaptureState::Failed,
+            detail: detail.into(),
+        }
+    }
 }
 
 /// Declares which notifications are worth keeping. Capture is off until the
@@ -163,6 +258,10 @@ pub struct Settings {
     pub theme: ThemePreference,
     pub timer_face: TimerFace,
     pub notification_filter: NotificationFilter,
+    /// Turn the desktop's notification banners off for the length of each focus
+    /// interval and put them back afterwards. Off by default: it changes a
+    /// setting that belongs to the desktop, not to Pomodoro.
+    pub silence_banners_during_focus: bool,
 }
 
 impl Default for Settings {
@@ -179,6 +278,7 @@ impl Default for Settings {
             theme: ThemePreference::System,
             timer_face: TimerFace::Digits,
             notification_filter: NotificationFilter::default(),
+            silence_banners_during_focus: false,
         }
     }
 }
@@ -315,6 +415,16 @@ pub struct AppData {
     pub sessions: Vec<SessionRecord>,
     /// Newest first, capped at [`NOTIFICATION_RETENTION`].
     pub notifications: Vec<DesktopNotification>,
+    /// Set while Pomodoro has the desktop's notification banners turned off,
+    /// holding the value to put back. Persisted deliberately: if the app is
+    /// killed mid-focus the next launch reads this and restores the desktop
+    /// rather than leaving it silent forever.
+    pub banner_restore: Option<bool>,
+    /// Runtime only. Serialized so the UI can read it, never read back from
+    /// disk, because a monitor that was running last time says nothing about
+    /// whether one is running now.
+    #[serde(skip_deserializing)]
+    pub capture_status: CaptureStatus,
 }
 
 impl Default for AppData {
@@ -328,6 +438,8 @@ impl Default for AppData {
             interruptions: Vec::new(),
             sessions: Vec::new(),
             notifications: Vec::new(),
+            banner_restore: None,
+            capture_status: CaptureStatus::off(),
         }
     }
 }
@@ -573,6 +685,11 @@ impl AppData {
                 interruption.task_id = None;
             }
         }
+        for notification in &mut self.notifications {
+            if notification.task_id.as_deref() == Some(id) {
+                notification.task_id = None;
+            }
+        }
         true
     }
 
@@ -606,6 +723,34 @@ impl AppData {
 
     pub fn handle_interruption(&mut self, id: &str) -> bool {
         self.set_interruption_handled(id, true)
+    }
+
+    /// Turns a captured interruption into a task, at most once. Returns the task
+    /// id whether it was created now or by an earlier call.
+    pub fn convert_interruption_to_task(&mut self, id: &str, now_ms: i64) -> Option<String> {
+        let (text, existing_task) = self
+            .interruptions
+            .iter()
+            .find(|interruption| interruption.id == id)
+            .map(|interruption| (interruption.text.clone(), interruption.task_id.clone()))?;
+
+        if let Some(task_id) = existing_task {
+            if self.tasks.iter().any(|task| task.id == task_id) {
+                self.handle_interruption(id);
+                return Some(task_id);
+            }
+        }
+
+        let task = self.create_task(text, 1, now_ms)?;
+        if let Some(interruption) = self
+            .interruptions
+            .iter_mut()
+            .find(|interruption| interruption.id == id)
+        {
+            interruption.task_id = Some(task.id.clone());
+            interruption.handled = true;
+        }
+        Some(task.id)
     }
 
     pub fn set_interruption_handled(&mut self, id: &str, handled: bool) -> bool {
@@ -642,14 +787,24 @@ impl AppData {
     }
 
     /// True while a focus interval is actually counting down.
-    pub fn is_focus_running(&self) -> bool {
-        self.timer.phase == Phase::Focus && self.timer.status == TimerStatus::Running
+    ///
+    /// The status alone is not enough. A focus interval that ran out keeps
+    /// `Running` until the next [`Self::tick`], which can be up to half a second
+    /// later; anything arriving in that gap is not during focus and must not be
+    /// filed as if it were. Asking for the remaining time at `now_ms` closes the
+    /// gap without waiting for the tick.
+    pub fn is_focus_running(&self, now_ms: i64) -> bool {
+        self.timer.phase == Phase::Focus
+            && self.timer.status == TimerStatus::Running
+            && self.timer.current_remaining_seconds(now_ms) > 0
     }
 
     /// Files an observed desktop notification if the filter accepts it.
     ///
     /// Returns `None` when the notification was filtered out, so callers can
     /// skip persisting and broadcasting.
+    /// Convenience wrapper for a notification with no `replaces_id`.
+    #[cfg(test)]
     pub fn capture_notification(
         &mut self,
         app_name: impl Into<String>,
@@ -658,15 +813,62 @@ impl AppData {
         urgency: u8,
         now_ms: i64,
     ) -> Option<DesktopNotification> {
-        let app_name = app_name.into().trim().to_owned();
+        self.capture_notify(app_name, summary, body, urgency, 0, now_ms)
+    }
+
+    /// Files an observed desktop notification, honouring the sender's
+    /// `replaces_id`.
+    ///
+    /// A non-zero `replaces_id` means the sender is updating a notification it
+    /// posted earlier — a download counting up, a call still ringing. Those land
+    /// on the existing row rather than adding one per update, so a chatty sender
+    /// cannot flood the inbox. Text is truncated and Pomodoro's own boundary
+    /// notifications are dropped before the filter is consulted.
+    pub fn capture_notify(
+        &mut self,
+        app_name: impl Into<String>,
+        summary: impl Into<String>,
+        body: impl Into<String>,
+        urgency: u8,
+        replaces_id: u32,
+        now_ms: i64,
+    ) -> Option<DesktopNotification> {
+        let app_name = truncate_chars(app_name.into().trim().to_owned(), MAX_APP_NAME_CHARS);
+        if is_self_notification(&app_name) {
+            return None;
+        }
         let urgency = urgency.min(MAX_URGENCY);
-        let during_focus = self.is_focus_running();
+        let during_focus = self.is_focus_running(now_ms);
         if !self
             .settings
             .notification_filter
             .accepts(&app_name, urgency, during_focus)
         {
             return None;
+        }
+
+        let summary = truncate_chars(summary.into(), MAX_SUMMARY_CHARS);
+        let body = truncate_chars(body.into(), MAX_BODY_CHARS);
+
+        if replaces_id != 0 {
+            if let Some(position) = self.notifications.iter().position(|notification| {
+                notification.replaces_id == replaces_id
+                    && notification.app_name.to_lowercase() == app_name.to_lowercase()
+            }) {
+                let mut existing = self.notifications.remove(position);
+                // Only genuinely new words are worth re-reading. An update that
+                // repeats the same text leaves a triaged row triaged.
+                if existing.summary != summary || existing.body != body {
+                    existing.triaged = false;
+                }
+                existing.summary = summary;
+                existing.body = body;
+                existing.urgency = urgency;
+                existing.received_at = now_ms;
+                existing.during_focus = during_focus;
+                self.notifications.insert(0, existing.clone());
+                return Some(existing);
+            }
         }
 
         let notification = DesktopNotification {
@@ -677,16 +879,49 @@ impl AppData {
                     .map(|notification| notification.id.as_str()),
             ),
             app_name,
-            summary: summary.into(),
-            body: body.into(),
+            summary,
+            body,
             urgency,
             received_at: now_ms,
             during_focus,
             triaged: false,
+            replaces_id,
+            task_id: None,
         };
         self.notifications.insert(0, notification.clone());
         self.notifications.truncate(NOTIFICATION_RETENTION);
         Some(notification)
+    }
+
+    /// Turns a captured notification into a task, at most once.
+    ///
+    /// Returns the task id, whether it was created now or by an earlier call, so
+    /// a double click on "Turn into task" cannot leave two identical tasks in
+    /// the list.
+    pub fn convert_notification_to_task(&mut self, id: &str, now_ms: i64) -> Option<String> {
+        let (summary, existing_task) = self
+            .notifications
+            .iter()
+            .find(|notification| notification.id == id)
+            .map(|notification| (notification.summary.clone(), notification.task_id.clone()))?;
+
+        if let Some(task_id) = existing_task {
+            if self.tasks.iter().any(|task| task.id == task_id) {
+                self.set_notification_triaged(id, true);
+                return Some(task_id);
+            }
+        }
+
+        let task = self.create_task(summary, 1, now_ms)?;
+        if let Some(notification) = self
+            .notifications
+            .iter_mut()
+            .find(|notification| notification.id == id)
+        {
+            notification.task_id = Some(task.id.clone());
+            notification.triaged = true;
+        }
+        Some(task.id)
     }
 
     pub fn set_notification_triaged(&mut self, id: &str, triaged: bool) -> bool {
@@ -1071,7 +1306,7 @@ mod tests {
         let id = data.tasks[0].id.clone();
         data.select_task(Some(id));
         data.start_or_resume(0);
-        assert!(data.is_focus_running());
+        assert!(data.is_focus_running(0));
     }
 
     #[test]
@@ -1157,6 +1392,237 @@ mod tests {
             .capture_notification("Slack", "Standup", "Now", 1, 1_000)
             .expect("capture during focus");
         assert!(during.during_focus);
+    }
+
+    #[test]
+    fn a_focus_interval_that_ran_out_is_no_longer_focus() {
+        // The status stays Running between expiry and the next tick, up to half
+        // a second later. A notification arriving in that gap belongs to the
+        // break the user is already in, not to the focus that just ended.
+        let mut data = AppData::default();
+        data.settings.notification_filter = capturing_filter();
+        running_focus(&mut data);
+        let expires_at = data.timer.ends_at.expect("a running timer has a deadline");
+
+        assert!(data.is_focus_running(expires_at - 1));
+        assert!(!data.is_focus_running(expires_at));
+        assert!(!data.is_focus_running(expires_at + 5_000));
+
+        let late = data
+            .capture_notification("Slack", "Standup", "Now", 1, expires_at + 100)
+            .expect("the notification is still captured");
+        assert!(!late.during_focus);
+        // The timer has not been ticked yet, so this really is the gap.
+        assert_eq!(data.timer.status, TimerStatus::Running);
+        assert_eq!(data.timer.phase, Phase::Focus);
+    }
+
+    #[test]
+    fn focus_only_capture_stops_the_moment_the_interval_expires() {
+        let mut data = AppData::default();
+        data.settings.notification_filter = NotificationFilter {
+            focus_only: true,
+            ..capturing_filter()
+        };
+        running_focus(&mut data);
+        let expires_at = data.timer.ends_at.expect("a running timer has a deadline");
+
+        assert!(data
+            .capture_notification("Slack", "During", "", 1, expires_at - 1)
+            .is_some());
+        assert!(data
+            .capture_notification("Slack", "After", "", 1, expires_at + 1)
+            .is_none());
+    }
+
+    #[test]
+    fn pomodoros_own_notifications_are_never_captured() {
+        let mut data = AppData::default();
+        data.settings.notification_filter = NotificationFilter {
+            // Even naming itself a priority app cannot get it in.
+            priority_apps: vec!["Pomodoro".to_string()],
+            ..capturing_filter()
+        };
+
+        assert!(data
+            .capture_notification("Pomodoro", "Focus complete", "Step away", 1, 10)
+            .is_none());
+        assert!(data
+            .capture_notification("  pomodoro  ", "Break complete", "", 1, 11)
+            .is_none());
+        assert!(data
+            .capture_notification("app.pomodoro.timer", "Focus complete", "", 1, 12)
+            .is_none());
+        assert!(data.notifications.is_empty());
+
+        // A different app whose name merely contains "pomodoro" is not us.
+        assert!(data
+            .capture_notification("Pomodoro Tracker", "Hello", "", 1, 13)
+            .is_some());
+    }
+
+    #[test]
+    fn oversized_notification_text_is_truncated_on_a_character_boundary() {
+        let mut data = AppData::default();
+        data.settings.notification_filter = capturing_filter();
+
+        // Multi-byte throughout, so a byte-wise cut would split a character and
+        // corrupt the store.
+        let captured = data
+            .capture_notification(
+                "é".repeat(MAX_APP_NAME_CHARS + 10),
+                "字".repeat(MAX_SUMMARY_CHARS + 10),
+                "😀".repeat(MAX_BODY_CHARS + 10),
+                1,
+                10,
+            )
+            .expect("an oversized notification is kept, just shortened");
+
+        assert_eq!(captured.app_name.chars().count(), MAX_APP_NAME_CHARS);
+        assert_eq!(captured.summary.chars().count(), MAX_SUMMARY_CHARS);
+        assert_eq!(captured.body.chars().count(), MAX_BODY_CHARS);
+        // Round-tripping proves nothing was cut mid-character.
+        let json = serde_json::to_string(&captured).unwrap();
+        let restored: DesktopNotification = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, captured);
+    }
+
+    #[test]
+    fn an_update_lands_on_the_notification_it_replaces() {
+        let mut data = AppData::default();
+        data.settings.notification_filter = capturing_filter();
+
+        let first = data
+            .capture_notify("Transmission", "Downloading", "10%", 1, 7, 100)
+            .expect("the first sighting creates a row");
+        let updated = data
+            .capture_notify("Transmission", "Downloading", "90%", 1, 7, 200)
+            .expect("the update lands on the same row");
+
+        assert_eq!(data.notifications.len(), 1);
+        assert_eq!(updated.id, first.id);
+        assert_eq!(updated.body, "90%");
+        assert_eq!(updated.received_at, 200);
+
+        // A different sender reusing the same id is a different notification.
+        data.capture_notify("Firefox", "Downloading", "10%", 1, 7, 300)
+            .expect("another app's id 7 is its own");
+        assert_eq!(data.notifications.len(), 2);
+
+        // replaces_id 0 always means "new", however often it is used.
+        data.capture_notify("Transmission", "Seeding", "a", 1, 0, 400)
+            .unwrap();
+        data.capture_notify("Transmission", "Seeding", "b", 1, 0, 401)
+            .unwrap();
+        assert_eq!(data.notifications.len(), 4);
+    }
+
+    #[test]
+    fn an_update_reopens_a_triaged_row_only_when_the_words_changed() {
+        let mut data = AppData::default();
+        data.settings.notification_filter = capturing_filter();
+
+        let first = data
+            .capture_notify("Signal", "Alice", "See you at six", 1, 3, 100)
+            .unwrap();
+        assert!(data.set_notification_triaged(&first.id, true));
+
+        // The same words again: the user has already dealt with this.
+        let repeat = data
+            .capture_notify("Signal", "Alice", "See you at six", 1, 3, 200)
+            .unwrap();
+        assert!(repeat.triaged);
+
+        // New words deserve another look.
+        let changed = data
+            .capture_notify("Signal", "Alice", "Make it seven", 1, 3, 300)
+            .unwrap();
+        assert!(!changed.triaged);
+    }
+
+    #[test]
+    fn turning_a_notification_into_a_task_twice_makes_one_task() {
+        let mut data = AppData::default();
+        data.settings.notification_filter = capturing_filter();
+        let captured = data
+            .capture_notification("Thunderbird", "Re: brief review", "body", 1, 10)
+            .unwrap();
+
+        let first = data
+            .convert_notification_to_task(&captured.id, 20)
+            .expect("the first conversion creates a task");
+        let second = data
+            .convert_notification_to_task(&captured.id, 30)
+            .expect("the second returns the task the first made");
+
+        assert_eq!(first, second);
+        assert_eq!(data.tasks.len(), 1);
+        assert_eq!(data.tasks[0].title, "Re: brief review");
+        assert_eq!(
+            data.notifications[0].task_id.as_deref(),
+            Some(first.as_str())
+        );
+        assert!(data.notifications[0].triaged);
+
+        // Deleting the task releases the link, so the notification can be turned
+        // into a task again rather than pointing at something that is gone.
+        assert!(data.delete_task(&first));
+        assert_eq!(data.notifications[0].task_id, None);
+        let third = data
+            .convert_notification_to_task(&captured.id, 40)
+            .expect("a released notification converts again");
+        assert_ne!(third, first);
+        assert_eq!(data.tasks.len(), 1);
+
+        assert!(data
+            .convert_notification_to_task("notif-missing", 50)
+            .is_none());
+    }
+
+    #[test]
+    fn turning_an_interruption_into_a_task_twice_makes_one_task() {
+        let mut data = AppData::default();
+        let captured = data
+            .capture_interruption("Check the deploy", InterruptionCategory::Internal, 10)
+            .unwrap();
+
+        let first = data
+            .convert_interruption_to_task(&captured.id, 20)
+            .expect("the first conversion creates a task");
+        let second = data
+            .convert_interruption_to_task(&captured.id, 30)
+            .expect("the second returns the task the first made");
+
+        assert_eq!(first, second);
+        assert_eq!(data.tasks.len(), 1);
+        assert_eq!(
+            data.interruptions[0].task_id.as_deref(),
+            Some(first.as_str())
+        );
+        assert!(data.interruptions[0].handled);
+
+        assert!(data
+            .convert_interruption_to_task("interruption-missing", 40)
+            .is_none());
+    }
+
+    #[test]
+    fn capture_status_is_runtime_only_and_never_read_back_from_disk() {
+        let mut data = AppData::default();
+        assert_eq!(data.capture_status.state, CaptureState::Off);
+
+        data.capture_status = CaptureStatus::failed("the session bus refused BecomeMonitor");
+        let json = serde_json::to_value(&data).unwrap();
+        // The UI needs to see it...
+        assert_eq!(json["captureStatus"]["state"], "failed");
+        assert_eq!(
+            json["captureStatus"]["detail"],
+            "the session bus refused BecomeMonitor"
+        );
+
+        // ...but a monitor that ran last time says nothing about this run.
+        let reloaded: AppData = serde_json::from_value(json).unwrap();
+        assert_eq!(reloaded.capture_status, CaptureStatus::off());
     }
 
     #[test]

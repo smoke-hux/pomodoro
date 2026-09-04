@@ -28,6 +28,21 @@ use zbus::{
     MatchRule,
 };
 
+use crate::domain::CaptureStatus;
+
+/// The eight arguments of `org.freedesktop.Notifications.Notify` (`susssasa{sv}i`),
+/// named so the deserialisation below stays readable.
+type NotifyArguments = (
+    String,
+    u32,
+    String,
+    String,
+    String,
+    Vec<String>,
+    HashMap<String, OwnedValue>,
+    i32,
+);
+
 const NOTIFICATIONS_INTERFACE: &str = "org.freedesktop.Notifications";
 const NOTIFY_MEMBER: &str = "Notify";
 
@@ -52,12 +67,15 @@ pub struct NotifyEvent {
     pub summary: String,
     pub body: String,
     pub urgency: u8,
+    /// The id the sender is replacing. Zero means this is a new notification;
+    /// anything else means the sender is updating one it posted earlier.
+    pub replaces_id: u32,
 }
 
 impl NotifyEvent {
     /// Identity used to recognise the relayed second copy. The relay preserves
-    /// the app name, summary and body but adds hints of its own, so those three
-    /// fields are the only stable key.
+    /// the app name, summary, body and `replaces_id` but adds hints of its own,
+    /// so those four fields are the only stable key.
     ///
     /// Fields are length-prefixed so text containing the separator cannot make
     /// two different notifications look alike.
@@ -65,13 +83,14 @@ impl NotifyEvent {
     /// The key contains notification text and must never be logged.
     pub fn dedup_key(&self) -> String {
         format!(
-            "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+            "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
             self.app_name.len(),
             self.app_name,
             self.summary.len(),
             self.summary,
             self.body.len(),
-            self.body
+            self.body,
+            self.replaces_id
         )
     }
 }
@@ -141,36 +160,65 @@ impl NotificationListener {
 
     /// Starts monitoring unless it is already running. Each accepted, deduped
     /// notification is handed to `sink` on the monitoring thread.
-    pub fn start<F>(self: &Arc<Self>, sink: F)
+    ///
+    /// `report` is called whenever the monitor's health changes, so the UI can
+    /// say "watching" only when something really is. Turning capture on is a
+    /// request, not a guarantee: the session bus can refuse `BecomeMonitor`, and
+    /// there may be no session bus at all.
+    pub fn start<F, G>(self: &Arc<Self>, sink: F, report: G)
     where
         F: Fn(NotifyEvent) + Send + 'static,
+        G: Fn(CaptureStatus) + Send + Sync + 'static,
     {
         if self.running.swap(true, Ordering::AcqRel) {
             return;
         }
 
+        // Shared because both the monitoring thread and the spawn-failure path
+        // below have to be able to report.
+        let report = Arc::new(report);
+        report(CaptureStatus::starting());
+
         let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
         let listener = Arc::clone(self);
+        let thread_report = Arc::clone(&report);
         thread::Builder::new()
             .name("notification-monitor".to_string())
             .spawn(move || {
-                let outcome = listener.monitor(generation, sink);
-                if listener.generation.load(Ordering::Acquire) == generation {
+                let report = thread_report;
+                let outcome = listener.monitor(generation, sink, report.as_ref());
+                let superseded = listener.generation.load(Ordering::Acquire) != generation;
+                if !superseded {
                     listener.running.store(false, Ordering::Release);
                     if let Ok(mut held) = listener.connection.lock() {
                         *held = None;
                     }
                 }
-                if let Err(error) = outcome {
-                    // Only the D-Bus failure is reported. No notification
-                    // content reaches this branch.
-                    eprintln!("notification capture stopped: {error}");
+                match outcome {
+                    Err(error) => {
+                        // Only the D-Bus failure is reported. No notification
+                        // content reaches this branch.
+                        eprintln!("notification capture stopped: {error}");
+                        if !superseded {
+                            report(CaptureStatus::failed(error.to_string()));
+                        }
+                    }
+                    // The loop ends without an error when the bus closes the
+                    // connection under us. That is still a capture that is no
+                    // longer happening, so it must not be reported as healthy.
+                    Ok(()) if !superseded => {
+                        report(CaptureStatus::failed(
+                            "the session bus closed the connection".to_string(),
+                        ));
+                    }
+                    Ok(()) => {}
                 }
             })
             .map(|_| ())
             .unwrap_or_else(|error| {
                 self.running.store(false, Ordering::Release);
                 eprintln!("could not start notification capture: {error}");
+                report(CaptureStatus::failed(error.to_string()));
             });
     }
 
@@ -189,9 +237,10 @@ impl NotificationListener {
         }
     }
 
-    fn monitor<F>(&self, generation: u64, sink: F) -> zbus::Result<()>
+    fn monitor<F, G>(&self, generation: u64, sink: F, report: &G) -> zbus::Result<()>
     where
         F: Fn(NotifyEvent),
+        G: Fn(CaptureStatus),
     {
         let connection = Connection::session()?;
         {
@@ -223,6 +272,8 @@ impl NotificationListener {
             "BecomeMonitor",
             &(vec![rule.to_string()], 0_u32),
         )?;
+
+        report(CaptureStatus::active());
 
         let mut deduplicator = Deduplicator::new(DEDUP_WINDOW_MS);
         for message in MessageIterator::from(connection) {
@@ -260,16 +311,8 @@ fn parse_notify(message: &Message) -> Option<NotifyEvent> {
     }
 
     let body = message.body();
-    let (app_name, _replaces_id, _app_icon, summary, text, _actions, hints, _expire_timeout): (
-        String,
-        u32,
-        String,
-        String,
-        String,
-        Vec<String>,
-        HashMap<String, OwnedValue>,
-        i32,
-    ) = body.deserialize().ok()?;
+    let (app_name, replaces_id, _app_icon, summary, text, _actions, hints, _expire_timeout): NotifyArguments =
+        body.deserialize().ok()?;
 
     let urgency = hints
         .get("urgency")
@@ -282,6 +325,7 @@ fn parse_notify(message: &Message) -> Option<NotifyEvent> {
         summary,
         body: text,
         urgency,
+        replaces_id,
     })
 }
 
@@ -311,6 +355,7 @@ mod tests {
             summary: summary.to_string(),
             body: body.to_string(),
             urgency: 1,
+            replaces_id: 0,
         }
     }
 
@@ -372,9 +417,12 @@ mod tests {
 
         let (sender, receiver) = mpsc::channel();
         let listener = Arc::new(NotificationListener::new());
-        listener.start(move |event| {
-            let _ = sender.send(event);
-        });
+        listener.start(
+            move |event| {
+                let _ = sender.send(event);
+            },
+            |_| {},
+        );
         thread::sleep(std::time::Duration::from_millis(1_500));
 
         let send = |summary: &str| {
@@ -413,9 +461,12 @@ mod tests {
 
         // Re-enabling capture works, so the connection was really released.
         let (sender, receiver) = mpsc::channel();
-        listener.start(move |event| {
-            let _ = sender.send(event);
-        });
+        listener.start(
+            move |event| {
+                let _ = sender.send(event);
+            },
+            |_| {},
+        );
         thread::sleep(std::time::Duration::from_millis(1_500));
         let restarted = format!("{summary}-restarted");
         send(&restarted);

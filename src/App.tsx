@@ -19,6 +19,33 @@ function isTextEntry(target: EventTarget | null) {
   );
 }
 
+/**
+ * True when Space is already the focused element's own key.
+ *
+ * Space is the timer's shortcut, but it is also how a keyboard user presses the
+ * button they have just tabbed to. The window-level handler used to swallow it
+ * either way, so tabbing to "Skip" and pressing Space started the timer and left
+ * the button untouched — the control looked focused and did nothing.
+ */
+export function activatesOnSpace(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target instanceof HTMLButtonElement || target instanceof HTMLAnchorElement) return true;
+  if (target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement) return true;
+  if (target instanceof HTMLInputElement) return true;
+  // <summary> opens its <details> on Space; the row menus are built from them.
+  if (target.tagName === "SUMMARY") return true;
+  const role = target.getAttribute("role");
+  return (
+    role === "button" ||
+    role === "checkbox" ||
+    role === "radio" ||
+    role === "switch" ||
+    role === "tab" ||
+    role === "option" ||
+    role === "menuitem"
+  );
+}
+
 function browserPreview(): AppSnapshot {
   const now = Date.now();
   return {
@@ -53,6 +80,8 @@ function browserPreview(): AppSnapshot {
         receivedAt: now - 8 * 60_000,
         duringFocus: true,
         triaged: false,
+        replacesId: 0,
+        taskId: null,
       },
       {
         id: "preview-notif-2",
@@ -63,8 +92,11 @@ function browserPreview(): AppSnapshot {
         receivedAt: now - 96 * 60_000,
         duringFocus: false,
         triaged: false,
+        replacesId: 0,
+        taskId: null,
       },
     ],
+    captureStatus: { state: "active", detail: "" },
     settings: {
       ...defaultSnapshot.settings,
       notificationFilter: {
@@ -271,6 +303,8 @@ export default function App() {
       if (captureOpen || settingsOpen) return;
       if (isTextEntry(event.target)) return;
       if (event.code === "Space") {
+        // The focused control gets its own key back.
+        if (activatesOnSpace(event.target)) return;
         event.preventDefault();
         void run(api.toggleTimer);
       } else if (event.ctrlKey && event.key.toLowerCase() === "i") {
@@ -354,6 +388,7 @@ export default function App() {
             interruptions={snapshot.interruptions}
             notifications={snapshot.notifications}
             captureEnabled={snapshot.settings.notificationFilter.enabled}
+            captureStatus={snapshot.captureStatus}
             activeTaskId={snapshot.timer.activeTaskId}
             addRequest={addRequest}
             selectionLocked={
@@ -441,6 +476,7 @@ export default function App() {
       <SettingsDialog
         open={settingsOpen}
         settings={snapshot.settings}
+        captureStatus={snapshot.captureStatus}
         notificationCount={snapshot.notifications.length}
         onClose={() => closeDialog(setSettingsOpen)}
         onSave={async (settings: Settings) => {

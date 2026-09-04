@@ -1,15 +1,21 @@
 mod domain;
 mod notifications;
+mod quiet;
 mod storage;
 
 use std::{
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicI64, AtomicI8, Ordering},
+        Arc, Mutex,
+    },
     thread,
     time::Duration,
 };
 
 use chrono::Utc;
-use domain::{AppData, InterruptionCategory, NotificationFilter, Phase, Settings, TimerStatus};
+use domain::{
+    AppData, CaptureStatus, InterruptionCategory, NotificationFilter, Phase, Settings, TimerStatus,
+};
 use notifications::NotificationListener;
 use storage::Store;
 use tauri::{
@@ -19,10 +25,61 @@ use tauri::{
 };
 use tauri_plugin_notification::NotificationExt;
 
+/// Captured notifications are persisted on a timer rather than one write per
+/// notification. A burst — a group chat waking up, a build reporting every step
+/// — would otherwise rewrite the whole JSON store many times a second, on the
+/// monitoring thread, while the user is trying to focus. User actions still save
+/// immediately; only observed notifications wait.
+const NOTIFICATION_FLUSH_MS: i64 = 2_000;
+
 struct RuntimeState {
     data: Mutex<AppData>,
     store: Store,
     listener: Arc<NotificationListener>,
+    /// When the oldest unsaved captured notification arrived, or 0 for none.
+    notifications_dirty_since: AtomicI64,
+    /// The last banner state [`sync_quiet`] acted on: `1` quiet, `0` normal,
+    /// `-1` not yet decided. Reconciliation runs twice a second, and asking the
+    /// desktop what its banner setting is means spawning a process; this makes
+    /// that happen once per transition rather than once per tick.
+    quiet_desire: AtomicI8,
+}
+
+impl RuntimeState {
+    /// Notes that captured notifications are waiting to be written.
+    fn mark_notifications_dirty(&self, now_ms: i64) {
+        let _ = self.notifications_dirty_since.compare_exchange(
+            0,
+            now_ms.max(1),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    fn clear_notifications_dirty(&self) {
+        self.notifications_dirty_since.store(0, Ordering::Release);
+    }
+
+    /// Writes captured notifications once they have been waiting long enough.
+    /// Called from the reconciliation loop, so a quiet burst still lands within
+    /// a couple of seconds.
+    fn flush_notifications(&self, now_ms: i64, force: bool) {
+        let dirty_since = self.notifications_dirty_since.load(Ordering::Acquire);
+        if dirty_since == 0 {
+            return;
+        }
+        if !force && now_ms.saturating_sub(dirty_since) < NOTIFICATION_FLUSH_MS {
+            return;
+        }
+        let Ok(data) = self.data.lock() else {
+            return;
+        };
+        if let Err(error) = self.store.save(&data) {
+            eprintln!("could not save captured notifications: {error}");
+            return;
+        }
+        self.clear_notifications_dirty();
+    }
 }
 
 fn now_ms() -> i64 {
@@ -73,23 +130,80 @@ fn record_notification(app: &AppHandle, event: notifications::NotifyEvent) {
         return;
     };
     if data
-        .capture_notification(
+        .capture_notify(
             event.app_name,
             event.summary,
             event.body,
             event.urgency,
+            event.replaces_id,
             now,
         )
         .is_none()
     {
         return;
     }
-    if let Err(error) = state.store.save(&data) {
-        eprintln!("could not save captured notification: {error}");
-    }
     let snapshot = data.snapshot(now);
     drop(data);
+    // The write is deferred; the UI is not. A notification appears in the inbox
+    // the moment it is filed, and reaches disk within NOTIFICATION_FLUSH_MS.
+    state.mark_notifications_dirty(now);
     publish(app, &snapshot);
+}
+
+/// Records the monitor's health so the UI can tell "capture is on" apart from
+/// "capture is working". Runs on the monitoring thread; the caller must not hold
+/// the data lock.
+fn report_capture_status(app: &AppHandle, status: CaptureStatus) {
+    let state = app.state::<RuntimeState>();
+    let Ok(mut data) = state.data.lock() else {
+        return;
+    };
+    if data.capture_status == status {
+        return;
+    }
+    data.capture_status = status;
+    let snapshot = data.snapshot(now_ms());
+    drop(data);
+    publish(app, &snapshot);
+}
+
+/// Brings the desktop's banner setting in line with the current phase, and
+/// reports whether the persisted restore marker moved.
+///
+/// The marker holds the value to put back, so an app that is killed mid-focus
+/// leaves behind everything the next launch needs to repair the desktop.
+fn sync_quiet(state: &RuntimeState, data: &mut AppData, now_ms: i64) -> bool {
+    let want_quiet = data.settings.silence_banners_during_focus && data.is_focus_running(now_ms);
+    let desire = i8::from(want_quiet);
+    if state.quiet_desire.swap(desire, Ordering::AcqRel) == desire {
+        return false;
+    }
+
+    match (want_quiet, data.banner_restore) {
+        (true, None) => {
+            // Banners the user had already switched off are not ours to claim,
+            // and nothing needs restoring afterwards.
+            let Some(true) = quiet::read_show_banners() else {
+                return false;
+            };
+            if let Err(error) = quiet::write_show_banners(false) {
+                eprintln!("could not silence notification banners: {error}");
+                return false;
+            }
+            data.banner_restore = Some(true);
+            true
+        }
+        (false, Some(previous)) => {
+            if let Err(error) = quiet::write_show_banners(previous) {
+                eprintln!("could not restore notification banners: {error}");
+            }
+            // Cleared either way: a marker that cannot be acted on would make
+            // every later launch retry a write that does not work.
+            data.banner_restore = None;
+            true
+        }
+        _ => false,
+    }
 }
 
 /// Brings the monitoring thread in line with the persisted filter. Idempotent,
@@ -97,20 +211,25 @@ fn record_notification(app: &AppHandle, event: notifications::NotifyEvent) {
 fn sync_listener(app: &AppHandle, state: &RuntimeState, enabled: bool) {
     if !enabled {
         state.listener.stop();
+        report_capture_status(app, CaptureStatus::off());
         return;
     }
-    let handle = app.clone();
-    state
-        .listener
-        .start(move |event| record_notification(&handle, event));
+    let sink_handle = app.clone();
+    let status_handle = app.clone();
+    state.listener.start(
+        move |event| record_notification(&sink_handle, event),
+        move |status| report_capture_status(&status_handle, status),
+    );
 }
 
 fn reconcile(state: &RuntimeState, app: &AppHandle) -> Result<AppData, String> {
     let now = now_ms();
     let mut data = lock_data(state)?;
     let completed = data.tick(now);
-    if completed.is_some() {
+    let quiet_changed = sync_quiet(state, &mut data, now);
+    if completed.is_some() || quiet_changed {
         state.store.save(&data)?;
+        state.clear_notifications_dirty();
     }
     let snapshot = data.snapshot(now);
     drop(data);
@@ -130,7 +249,10 @@ where
     let mut data = lock_data(state)?;
     let completed = data.tick(now);
     action(&mut data, now)?;
+    sync_quiet(state, &mut data, now);
     state.store.save(&data)?;
+    // The write above covers everything, captured notifications included.
+    state.clear_notifications_dirty();
     let snapshot = data.snapshot(now);
     drop(data);
 
@@ -348,15 +470,11 @@ fn convert_interruption_to_task(
     app: AppHandle,
 ) -> Result<AppData, String> {
     mutate(&state, &app, move |data, now| {
-        let text = data
-            .interruptions
-            .iter()
-            .find(|item| item.id == id)
-            .map(|item| item.text.clone())
-            .ok_or_else(|| "Interruption not found.".to_string())?;
-        data.create_task(text, 1, now)
+        if !data.interruptions.iter().any(|item| item.id == id) {
+            return Err("Interruption not found.".to_string());
+        }
+        data.convert_interruption_to_task(&id, now)
             .ok_or_else(|| "Could not create a task from this note.".to_string())?;
-        data.handle_interruption(&id);
         Ok(())
     })
 }
@@ -411,15 +529,17 @@ fn convert_notification(
     app: AppHandle,
 ) -> Result<AppData, String> {
     mutate(&state, &app, move |data, now| {
-        let summary = data
+        if !data
             .notifications
             .iter()
-            .find(|notification| notification.id == id)
-            .map(|notification| notification.summary.clone())
-            .ok_or_else(|| "Notification not found.".to_string())?;
-        data.create_task(summary, 1, now)
+            .any(|notification| notification.id == id)
+        {
+            return Err("Notification not found.".to_string());
+        }
+        // Idempotent: a second click returns the task the first one made rather
+        // than adding a duplicate to the list.
+        data.convert_notification_to_task(&id, now)
             .ok_or_else(|| "This notification has no summary to name a task.".to_string())?;
-        data.set_notification_triaged(&id, true);
         Ok(())
     })
 }
@@ -452,6 +572,26 @@ fn clear_history(state: State<'_, RuntimeState>, app: AppHandle) -> Result<AppDa
         data.sessions.clear();
         Ok(())
     })
+}
+
+/// Leaves the machine as Pomodoro found it: banners back on if they were turned
+/// off for a focus interval, and captured notifications written rather than
+/// waiting on the debounce.
+fn shut_down(app: &AppHandle) {
+    let state = app.state::<RuntimeState>();
+    state.listener.stop();
+    state.quiet_desire.store(0, Ordering::Release);
+    if let Ok(mut data) = state.data.lock() {
+        if let Some(previous) = data.banner_restore.take() {
+            if let Err(error) = quiet::write_show_banners(previous) {
+                eprintln!("could not restore notification banners: {error}");
+            }
+        }
+        if let Err(error) = state.store.save(&data) {
+            eprintln!("could not save on shutdown: {error}");
+        }
+    }
+    state.clear_notifications_dirty();
 }
 
 fn show_main_window(app: &AppHandle) {
@@ -487,7 +627,10 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                     Ok(())
                 });
             }
-            "quit" => app.exit(0),
+            "quit" => {
+                shut_down(app);
+                app.exit(0);
+            }
             _ => {}
         });
 
@@ -520,11 +663,20 @@ pub fn run() {
                 data: Mutex::new(data),
                 store,
                 listener: Arc::new(NotificationListener::new()),
+                notifications_dirty_since: AtomicI64::new(0),
+                quiet_desire: AtomicI8::new(-1),
             });
             build_tray(app)?;
 
             let handle = app.handle().clone();
             sync_listener(&handle, &handle.state::<RuntimeState>(), capture_enabled);
+
+            // If a previous run was killed while it had the desktop's banners
+            // turned off, the persisted marker is still set. Reconciling once
+            // here puts the desktop back before the first frame is drawn.
+            if let Err(error) = reconcile(&handle.state::<RuntimeState>(), &handle) {
+                eprintln!("timer reconciliation failed: {error}");
+            }
 
             thread::spawn(move || loop {
                 thread::sleep(Duration::from_millis(500));
@@ -532,6 +684,7 @@ pub fn run() {
                 if let Err(error) = reconcile(&state, &handle) {
                     eprintln!("timer reconciliation failed: {error}");
                 }
+                state.flush_notifications(now_ms(), false);
             });
             Ok(())
         })

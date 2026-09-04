@@ -29,6 +29,29 @@ export interface DesktopNotification {
   receivedAt: number;
   duringFocus: boolean;
   triaged: boolean;
+  /**
+   * The id the sender passed to Notify. Non-zero means later calls carrying the
+   * same id update this row instead of adding another one.
+   */
+  replacesId: number;
+  /** The task this notification was turned into, so it cannot be turned twice. */
+  taskId: string | null;
+}
+
+/**
+ * Whether the notification monitor is actually running.
+ *
+ * Capture can be switched on and still fail to start — the session bus may
+ * refuse to hand out a monitor, or there may be no session bus at all. The UI
+ * reads this rather than the settings toggle, so it never claims to be watching
+ * when nothing is.
+ */
+export type CaptureState = "off" | "starting" | "active" | "failed";
+
+export interface CaptureStatus {
+  state: CaptureState;
+  /** A D-Bus error message when the state is "failed". Never message text. */
+  detail: string;
 }
 
 export interface NotificationFilter {
@@ -51,6 +74,12 @@ export interface Settings {
   theme: ThemePreference;
   timerFace: TimerFace;
   notificationFilter: NotificationFilter;
+  /**
+   * Turn the desktop's notification banners off for the length of each focus
+   * interval and put them back afterwards. Off by default: it changes a setting
+   * that belongs to the desktop, not to Pomodoro.
+   */
+  silenceBannersDuringFocus: boolean;
 }
 
 export interface TimerState {
@@ -80,6 +109,7 @@ export interface Interruption {
   category: "internal" | "external";
   capturedAt: number;
   handled: boolean;
+  /** The task this note was turned into, so it cannot be turned twice. */
   taskId: string | null;
 }
 
@@ -101,6 +131,7 @@ export interface AppSnapshot {
   interruptions: Interruption[];
   sessions: SessionRecord[];
   notifications: DesktopNotification[];
+  captureStatus: CaptureStatus;
 }
 
 export const defaultSnapshot: AppSnapshot = {
@@ -115,6 +146,7 @@ export const defaultSnapshot: AppSnapshot = {
     sound: true,
     theme: "system",
     timerFace: "digits",
+    silenceBannersDuringFocus: false,
     // Capture is opt-in. Nothing is watched until the user says so.
     notificationFilter: {
       enabled: false,
@@ -138,4 +170,5 @@ export const defaultSnapshot: AppSnapshot = {
   interruptions: [],
   sessions: [],
   notifications: [],
+  captureStatus: { state: "off", detail: "" },
 };

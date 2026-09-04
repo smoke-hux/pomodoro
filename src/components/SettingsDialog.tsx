@@ -1,6 +1,11 @@
-import { useEffect, useState } from "react";
-import { X } from "lucide-react";
-import type { NotificationFilter, Settings, TimerFace as TimerFaceId } from "../types";
+import { useEffect, useRef, useState } from "react";
+import { AlertTriangle, X } from "lucide-react";
+import type {
+  CaptureStatus,
+  NotificationFilter,
+  Settings,
+  TimerFace as TimerFaceId,
+} from "../types";
 import { TimerFace } from "./TimerFace";
 
 /**
@@ -26,6 +31,7 @@ const TIMER_FACES: { id: TimerFaceId; name: string; note: string }[] = [
 interface SettingsDialogProps {
   open: boolean;
   settings: Settings;
+  captureStatus: CaptureStatus;
   notificationCount: number;
   onClose: () => void;
   onSave: (settings: Settings) => Promise<void>;
@@ -157,9 +163,42 @@ function NumberSetting({
   );
 }
 
+/**
+ * Turns the monitor's reported health into something to show the user, or
+ * `null` when the toggle and reality already agree and there is nothing to say.
+ *
+ * `saved` is the filter as the backend has it, not the unsaved draft: a checkbox
+ * the user just ticked says nothing about a monitor that has not been asked to
+ * start yet.
+ */
+function describeCapture(
+  status: CaptureStatus,
+  saved: boolean,
+): { tone: "warning" | "info"; text: string } | null {
+  if (status.state === "failed") {
+    return {
+      tone: "warning",
+      text: `Capture is switched on but nothing is being watched. The desktop notification service refused the connection${
+        status.detail ? `: ${status.detail}` : "."
+      }`,
+    };
+  }
+  if (status.state === "starting") {
+    return { tone: "info", text: "Connecting to the desktop notification service…" };
+  }
+  if (saved && status.state === "off") {
+    return {
+      tone: "warning",
+      text: "Capture is switched on but the watcher is not running. Turn it off and on again to retry.",
+    };
+  }
+  return null;
+}
+
 export function SettingsDialog({
   open,
   settings,
+  captureStatus,
   notificationCount,
   onClose,
   onSave,
@@ -170,13 +209,19 @@ export function SettingsDialog({
   const [confirmClear, setConfirmClear] = useState(false);
   const [confirmClearNotifications, setConfirmClearNotifications] = useState(false);
 
+  // The backend broadcasts a fresh snapshot twice a second while the timer runs,
+  // and every one of them is a new `settings` object. Seeding the draft from
+  // that object on each change wiped whatever the user was in the middle of
+  // typing. The draft is seeded once, when the dialog opens, and belongs to the
+  // user until they save or cancel.
+  const latestSettings = useRef(settings);
+  latestSettings.current = settings;
   useEffect(() => {
-    if (open) {
-      setDraft(settings);
-      setConfirmClear(false);
-      setConfirmClearNotifications(false);
-    }
-  }, [open, settings]);
+    if (!open) return;
+    setDraft(latestSettings.current);
+    setConfirmClear(false);
+    setConfirmClearNotifications(false);
+  }, [open]);
 
   if (!open) return null;
 
@@ -184,6 +229,9 @@ export function SettingsDialog({
   const setFilter = (patch: Partial<NotificationFilter>) =>
     setDraft({ ...draft, notificationFilter: { ...filter, ...patch } });
   const captureOff = !filter.enabled;
+  // What is really happening on the bus, which is not the same as what the
+  // checkbox asks for: the session bus can refuse to hand out a monitor.
+  const captureNotice = describeCapture(captureStatus, settings.notificationFilter.enabled);
 
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
@@ -307,11 +355,13 @@ export function SettingsDialog({
             <fieldset>
               <legend>Notification capture</legend>
               <p className="fieldset-note">
-                Pomodoro can watch the desktop notification service and file what
-                other apps send, so it can be read after the interval instead of
-                during it. Captured text stays in Pomodoro’s local data on this
-                machine. It is never sent anywhere, and the app makes no network
-                requests. Capture stays off until you turn it on here.
+                Pomodoro can watch the desktop notification service and file a
+                copy of what other apps send, so it can be read after the
+                interval instead of during it. Watching does not hide anything:
+                banners still appear and sounds still play unless you also
+                silence them below. Captured text stays in Pomodoro’s local data
+                on this machine. It is never sent anywhere, and the app makes no
+                network requests. Capture stays off until you turn it on here.
               </p>
               <label className="toggle-row">
                 <span>
@@ -324,6 +374,14 @@ export function SettingsDialog({
                   onChange={(event) => setFilter({ enabled: event.target.checked })}
                 />
               </label>
+              {captureNotice && (
+                <p className={`capture-status ${captureNotice.tone}`} role="status">
+                  {captureNotice.tone === "warning" && (
+                    <AlertTriangle aria-hidden="true" size={15} />
+                  )}
+                  <span>{captureNotice.text}</span>
+                </p>
+              )}
               <div className={`setting-row ${captureOff ? "setting-disabled" : ""}`}>
                 <label htmlFor="min-urgency">Minimum urgency</label>
                 <select
@@ -370,6 +428,27 @@ export function SettingsDialog({
                 disabled={captureOff}
                 onChange={(priorityApps) => setFilter({ priorityApps })}
               />
+              <label className="toggle-row">
+                <span>
+                  <strong>Silence banners during focus</strong>
+                  <small>
+                    Switches the desktop’s own Do Not Disturb on for the length of
+                    each focus interval and switches it back afterwards. This
+                    changes a GNOME setting outside Pomodoro, so it is off by
+                    default. Banners you had already turned off are left alone.
+                  </small>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={draft.silenceBannersDuringFocus}
+                  onChange={(event) =>
+                    setDraft({
+                      ...draft,
+                      silenceBannersDuringFocus: event.target.checked,
+                    })
+                  }
+                />
+              </label>
             </fieldset>
 
             <fieldset>

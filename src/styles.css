@@ -1927,6 +1927,36 @@ input[type="radio"] {
   overflow-wrap: anywhere;
 }
 
+.capture-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  background: var(--surface-hover);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+/* The icon travels with the words: colour alone never carries the warning. */
+.capture-status.warning {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.capture-status svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.notice-list .capture-status {
+  margin: 8px 16px;
+}
+
 .setting-disabled {
   opacity: 0.58;
 }

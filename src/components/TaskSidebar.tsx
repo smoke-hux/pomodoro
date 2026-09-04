@@ -7,7 +7,12 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import type { DesktopNotification, FocusTask, Interruption } from "../types";
+import type {
+  CaptureStatus,
+  DesktopNotification,
+  FocusTask,
+  Interruption,
+} from "../types";
 import { NotificationInbox } from "./NotificationInbox";
 
 interface TaskSidebarProps {
@@ -15,6 +20,7 @@ interface TaskSidebarProps {
   interruptions: Interruption[];
   notifications: DesktopNotification[];
   captureEnabled: boolean;
+  captureStatus: CaptureStatus;
   activeTaskId: string | null;
   addRequest: number;
   selectionLocked: boolean;
@@ -37,6 +43,7 @@ export function TaskSidebar({
   interruptions,
   notifications,
   captureEnabled,
+  captureStatus,
   activeTaskId,
   addRequest,
   selectionLocked,
@@ -308,6 +315,7 @@ export function TaskSidebar({
       <NotificationInbox
         notifications={notifications}
         captureEnabled={captureEnabled}
+        captureStatus={captureStatus}
         onTriage={onTriageNotification}
         onConvert={onConvertNotification}
         onDelete={onDeleteNotification}
