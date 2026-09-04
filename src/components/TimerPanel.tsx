@@ -74,13 +74,12 @@ export function TimerPanel({
 
   return (
     <section className={`timer-panel phase-${timer.phase}`} aria-labelledby="timer-heading">
-      <div className="phase-tabs" role="tablist" aria-label="Timer mode">
+      <div className="phase-tabs" role="group" aria-label="Timer mode">
         {(Object.keys(phaseLabels) as Phase[]).map((phase) => (
           <button
             key={phase}
             type="button"
-            role="tab"
-            aria-selected={timer.phase === phase}
+            aria-pressed={timer.phase === phase}
             disabled={timer.status !== "idle"}
             onClick={() => onSetPhase(phase)}
           >

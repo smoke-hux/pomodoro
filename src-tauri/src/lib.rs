@@ -13,9 +13,7 @@ use std::{
 };
 
 use chrono::Utc;
-use domain::{
-    AppData, CaptureStatus, InterruptionCategory, NotificationFilter, Phase, Settings, TimerStatus,
-};
+use domain::{AppData, CaptureStatus, InterruptionCategory, Phase, Settings, TimerStatus};
 use notifications::NotificationListener;
 use storage::Store;
 use tauri::{
@@ -494,20 +492,6 @@ fn update_settings(
 }
 
 #[tauri::command]
-fn set_notification_filter(
-    filter: NotificationFilter,
-    state: State<'_, RuntimeState>,
-    app: AppHandle,
-) -> Result<AppData, String> {
-    let snapshot = mutate(&state, &app, move |data, _| {
-        data.settings.notification_filter = filter.sanitized();
-        Ok(())
-    })?;
-    sync_listener(&app, &state, snapshot.settings.notification_filter.enabled);
-    Ok(snapshot)
-}
-
-#[tauri::command]
 fn triage_notification(
     id: String,
     triaged: bool,
@@ -711,7 +695,6 @@ pub fn run() {
             convert_interruption_to_task,
             update_settings,
             clear_history,
-            set_notification_filter,
             triage_notification,
             convert_notification,
             delete_notification,

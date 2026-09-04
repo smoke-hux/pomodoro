@@ -154,6 +154,7 @@ export default function App() {
   const [notice, setNotice] = useState("");
   const [ready, setReady] = useState(!inTauri);
   const noticeTimer = useRef<number | null>(null);
+  const snapshotVersion = useRef(0);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const knownSessionIds = useRef(new Set<string>());
   const hasSessionBaseline = useRef(!inTauri);
@@ -194,37 +195,54 @@ export default function App() {
     noticeTimer.current = window.setTimeout(() => setNotice(""), 3_000);
   }, []);
 
+  const acceptSnapshot = useCallback(
+    (next: AppSnapshot, expectedVersion?: number) => {
+      if (
+        expectedVersion !== undefined &&
+        expectedVersion !== snapshotVersion.current
+      ) {
+        return false;
+      }
+      snapshotVersion.current += 1;
+      setSnapshot(next);
+      return true;
+    },
+    [],
+  );
+
   const run = useCallback(
     async (action: () => Promise<AppSnapshot>, successMessage?: string) => {
       if (!inTauri) {
         showNotice("Desktop controls are active in the packaged Ubuntu app.");
         return;
       }
+      const requestVersion = ++snapshotVersion.current;
       try {
         const next = await action();
-        setSnapshot(next);
+        acceptSnapshot(next, requestVersion);
         if (successMessage) showNotice(successMessage);
       } catch (error) {
         showNotice(typeof error === "string" ? error : "That action could not be completed.");
       }
     },
-    [inTauri, showNotice],
+    [acceptSnapshot, inTauri, showNotice],
   );
 
   useEffect(() => {
     if (!inTauri) return;
     let cancelled = false;
+    const requestVersion = snapshotVersion.current;
     void api
       .snapshot()
       .then((next) => {
-        if (!cancelled) {
+        if (cancelled) return;
+        if (acceptSnapshot(next, requestVersion)) {
           for (const session of next.sessions) {
             knownSessionIds.current.add(session.id);
           }
           hasSessionBaseline.current = true;
-          setSnapshot(next);
-          setReady(true);
         }
+        setReady(true);
       })
       .catch(() => {
         if (!cancelled) {
@@ -246,32 +264,51 @@ export default function App() {
       if (hasNewCompletion && event.payload.settings.sound) {
         void playCompletionChime();
       }
-      setSnapshot(event.payload);
+      acceptSnapshot(event.payload);
     });
 
     return () => {
       cancelled = true;
       void unlisten.then((stop) => stop());
     };
-  }, [inTauri, showNotice]);
+  }, [acceptSnapshot, inTauri, showNotice]);
 
   // The countdown only advances while the timer is running, so that is the only
   // time the display needs repainting. Idle and paused states change solely
   // through user actions, which already arrive on the "state-changed" event —
   // polling through them was two IPC round trips per second, all day, for a
-  // number that was not moving.
+  // number that was not moving. The timer is displayed at whole-second
+  // precision, so polling faster than once per second only rerenders unrelated
+  // task, inbox, and ledger trees without producing a new visible value.
   const timerStatus = snapshot.timer.status;
   useEffect(() => {
     if (!inTauri || timerStatus !== "running") return;
     let cancelled = false;
-    const poll = window.setInterval(() => {
-      void api.snapshot().then((next) => !cancelled && setSnapshot(next)).catch(() => undefined);
-    }, 500);
+    let timeout: number | null = null;
+    const poll = async () => {
+      const requestVersion = snapshotVersion.current;
+      try {
+        const next = await api.snapshot();
+        if (!cancelled) acceptSnapshot(next, requestVersion);
+      } catch {
+        // A later state event or poll can recover from a transient IPC miss.
+      } finally {
+        if (!cancelled) timeout = window.setTimeout(poll, 1_000);
+      }
+    };
+    timeout = window.setTimeout(poll, 1_000);
     return () => {
       cancelled = true;
-      window.clearInterval(poll);
+      if (timeout !== null) window.clearTimeout(timeout);
     };
-  }, [inTauri, timerStatus]);
+  }, [acceptSnapshot, inTauri, timerStatus]);
+
+  useEffect(
+    () => () => {
+      if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     document.documentElement.dataset.theme = snapshot.settings.theme;
@@ -480,17 +517,7 @@ export default function App() {
         notificationCount={snapshot.notifications.length}
         onClose={() => closeDialog(setSettingsOpen)}
         onSave={async (settings: Settings) => {
-          // update_settings persists the filter, but only set_notification_filter
-          // starts or stops the listener. Send the second call when the filter
-          // actually moved, so the watcher matches what was just saved.
-          const filterChanged =
-            JSON.stringify(settings.notificationFilter) !==
-            JSON.stringify(snapshot.settings.notificationFilter);
-          await run(async () => {
-            const saved = await api.updateSettings(settings);
-            if (!filterChanged) return saved;
-            return api.setNotificationFilter(settings.notificationFilter);
-          }, "Settings saved.");
+          await run(() => api.updateSettings(settings), "Settings saved.");
         }}
         onClearHistory={async () => {
           await run(api.clearHistory, "Session history cleared.");

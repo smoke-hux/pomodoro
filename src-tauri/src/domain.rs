@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 const MIN_MINUTES: u32 = 1;
 const MAX_MINUTES: u32 = 24 * 60;
@@ -1058,10 +1059,10 @@ fn app_list_contains(list: &[String], app_name: &str) -> bool {
 }
 
 fn unique_notification_id<'a>(now_ms: i64, existing: impl Iterator<Item = &'a str>) -> String {
-    let existing: Vec<&str> = existing.collect();
+    let existing: HashSet<&str> = existing.collect();
     for counter in 0_u32.. {
         let candidate = format!("notif-{now_ms}-{counter}");
-        if !existing.iter().any(|id| *id == candidate) {
+        if !existing.contains(candidate.as_str()) {
             return candidate;
         }
     }
@@ -1073,15 +1074,15 @@ fn deadline_from(now_ms: i64, seconds: u32) -> i64 {
 }
 
 fn unique_id<'a>(prefix: &str, now_ms: i64, existing: impl Iterator<Item = &'a str>) -> String {
-    let existing: Vec<&str> = existing.collect();
+    let existing: HashSet<&str> = existing.collect();
     let base = format!("{prefix}-{now_ms}");
-    if !existing.iter().any(|candidate| *candidate == base) {
+    if !existing.contains(base.as_str()) {
         return base;
     }
 
     for suffix in 1_u32.. {
         let candidate = format!("{base}-{suffix}");
-        if !existing.iter().any(|existing_id| *existing_id == candidate) {
+        if !existing.contains(candidate.as_str()) {
             return candidate;
         }
     }
@@ -1657,6 +1658,45 @@ mod tests {
         let second = data.capture_notification("A", "two", "", 1, 42).unwrap();
         assert_eq!(first.id, "notif-42-0");
         assert_eq!(second.id, "notif-42-1");
+    }
+
+    #[test]
+    fn same_millisecond_task_burst_keeps_two_thousand_ids_unique() {
+        let mut data = AppData::default();
+        let mut ids = HashSet::new();
+
+        for index in 0..2_000 {
+            let task = data
+                .create_task(format!("Queued task {index}"), 1, 42)
+                .expect("every non-empty task is accepted");
+            assert!(ids.insert(task.id), "a burst reused a task id");
+        }
+
+        assert_eq!(data.tasks.len(), 2_000);
+        assert_eq!(ids.len(), 2_000);
+    }
+
+    #[test]
+    fn ten_thousand_replacement_updates_never_grow_the_inbox() {
+        let mut data = AppData::default();
+        data.settings.notification_filter = capturing_filter();
+
+        for index in 0..10_000 {
+            data.capture_notify(
+                "Software Updater",
+                format!("Download {index}"),
+                "",
+                1,
+                77,
+                index,
+            )
+            .expect("every update passes the capture filter");
+        }
+
+        assert_eq!(data.notifications.len(), 1);
+        assert_eq!(data.notifications[0].summary, "Download 9999");
+        assert_eq!(data.notifications[0].received_at, 9_999);
+        assert_eq!(data.notifications[0].replaces_id, 77);
     }
 
     #[test]

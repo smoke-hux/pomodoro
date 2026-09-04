@@ -103,7 +103,6 @@ function NotificationRow({
         <p className="notice-meta">
           <span className="notice-app">{appName}</span>
           <span className={`notice-urgency ${URGENCY_CLASS[index]}`}>
-            <i aria-hidden="true" />
             {word}
           </span>
           {item.duringFocus && <span className="notice-during">During focus</span>}

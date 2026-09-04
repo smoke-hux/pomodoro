@@ -187,7 +187,6 @@ and broadcasts `state-changed`.
 
 | Command | Args | Effect |
 |---------|------|--------|
-| `set_notification_filter` | `filter: NotificationFilter` | Persist filter; start/stop the listener to match `enabled` |
 | `triage_notification` | `id: String`, `triaged: bool` | Mark handled |
 | `convert_notification` | `id: String` | Create a task titled from `summary`, mark triaged. **Idempotent**: a second call returns the task the first one made rather than a duplicate |
 | `delete_notification` | `id: String` | Remove one |

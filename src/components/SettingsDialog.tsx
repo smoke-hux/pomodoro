@@ -481,15 +481,14 @@ export function SettingsDialog({
                 </p>
                 <div
                   className="face-picker"
-                  role="radiogroup"
+                  role="group"
                   aria-labelledby="timer-face-label"
                 >
                   {TIMER_FACES.map((option) => (
                     <button
                       key={option.id}
                       type="button"
-                      role="radio"
-                      aria-checked={draft.timerFace === option.id}
+                      aria-pressed={draft.timerFace === option.id}
                       className={`face-option${draft.timerFace === option.id ? " selected" : ""}`}
                       onClick={() => setDraft({ ...draft, timerFace: option.id })}
                     >
