@@ -1,13 +1,129 @@
-import { useEffect, useState } from "react";
-import { X } from "lucide-react";
-import type { Settings } from "../types";
+import { useEffect, useRef, useState } from "react";
+import { AlertTriangle, X } from "lucide-react";
+import type {
+  CaptureStatus,
+  NotificationFilter,
+  Settings,
+  TimerFace as TimerFaceId,
+} from "../types";
+import { TimerFace } from "./TimerFace";
+
+/**
+ * Previewed at 15:00 of a 25:00 interval so every face shows a partial state —
+ * a full or empty ring tells the user nothing about how the face behaves.
+ */
+const PREVIEW_DURATION = 25 * 60;
+const PREVIEW_REMAINING = 15 * 60;
+
+const TIMER_FACES: { id: TimerFaceId; name: string; note: string }[] = [
+  { id: "digits", name: "Digits", note: "Exact to the second" },
+  { id: "ring", name: "Ring", note: "Proportion at a glance" },
+  { id: "arc", name: "Arc", note: "A half-circle gauge" },
+  { id: "analog", name: "Analog", note: "A wind-up kitchen dial" },
+  { id: "orbit", name: "Orbit", note: "One dot, one revolution" },
+  { id: "bar", name: "Bar", note: "A single depleting line" },
+  { id: "blocks", name: "Blocks", note: "Twelve fixed segments" },
+  { id: "pips", name: "Pips", note: "One mark per minute" },
+  { id: "vessel", name: "Vessel", note: "A quantity draining" },
+  { id: "words", name: "Words", note: "No numerals at all" },
+];
 
 interface SettingsDialogProps {
   open: boolean;
   settings: Settings;
+  captureStatus: CaptureStatus;
+  notificationCount: number;
   onClose: () => void;
   onSave: (settings: Settings) => Promise<void>;
   onClearHistory: () => Promise<void>;
+  onClearNotifications: () => Promise<void>;
+}
+
+// A named list of app names, added one at a time and removed by chip. Matching
+// on the backend is case-insensitive, so a duplicate that differs only in case
+// is silently folded into the existing entry rather than listed twice.
+function AppListEditor({
+  id,
+  label,
+  hint,
+  items,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  hint: string;
+  items: string[];
+  disabled: boolean;
+  onChange: (items: string[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const cleaned = draft.trim();
+
+  const add = () => {
+    if (!cleaned) return;
+    const known = items.some(
+      (item) => item.toLowerCase() === cleaned.toLowerCase(),
+    );
+    if (!known) onChange([...items, cleaned]);
+    setDraft("");
+  };
+
+  return (
+    <div className={`app-list ${disabled ? "setting-disabled" : ""}`}>
+      <label htmlFor={id}>{label}</label>
+      <small id={`${id}-hint`}>{hint}</small>
+      <div className="app-list-entry">
+        <input
+          id={id}
+          type="text"
+          value={draft}
+          disabled={disabled}
+          maxLength={64}
+          placeholder="App name"
+          aria-describedby={`${id}-hint`}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            // The dialog is one big form. Enter here means "add", not "save".
+            if (event.key === "Enter") {
+              event.preventDefault();
+              add();
+            }
+          }}
+        />
+        <button
+          className="secondary-control"
+          type="button"
+          disabled={disabled || !cleaned}
+          onClick={add}
+        >
+          Add
+        </button>
+      </div>
+      {items.length > 0 && (
+        <ul className="app-chips">
+          {items.map((item, index) => (
+            // Keyed and removed by position: a stored list written before this
+            // editor existed may hold two entries that differ only in case, and
+            // removing by value would take both.
+            <li key={`${index}-${item}`}>
+              <span>{item}</span>
+              <button
+                type="button"
+                disabled={disabled}
+                aria-label={`Remove ${item} from ${label.toLowerCase()}`}
+                onClick={() =>
+                  onChange(items.filter((_, position) => position !== index))
+                }
+              >
+                <X aria-hidden="true" size={13} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 function NumberSetting({
@@ -47,24 +163,75 @@ function NumberSetting({
   );
 }
 
+/**
+ * Turns the monitor's reported health into something to show the user, or
+ * `null` when the toggle and reality already agree and there is nothing to say.
+ *
+ * `saved` is the filter as the backend has it, not the unsaved draft: a checkbox
+ * the user just ticked says nothing about a monitor that has not been asked to
+ * start yet.
+ */
+function describeCapture(
+  status: CaptureStatus,
+  saved: boolean,
+): { tone: "warning" | "info"; text: string } | null {
+  if (status.state === "failed") {
+    return {
+      tone: "warning",
+      text: `Capture is switched on but nothing is being watched. The desktop notification service refused the connection${
+        status.detail ? `: ${status.detail}` : "."
+      }`,
+    };
+  }
+  if (status.state === "starting") {
+    return { tone: "info", text: "Connecting to the desktop notification service…" };
+  }
+  if (saved && status.state === "off") {
+    return {
+      tone: "warning",
+      text: "Capture is switched on but the watcher is not running. Turn it off and on again to retry.",
+    };
+  }
+  return null;
+}
+
 export function SettingsDialog({
   open,
   settings,
+  captureStatus,
+  notificationCount,
   onClose,
   onSave,
   onClearHistory,
+  onClearNotifications,
 }: SettingsDialogProps) {
   const [draft, setDraft] = useState(settings);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [confirmClearNotifications, setConfirmClearNotifications] = useState(false);
 
+  // The backend broadcasts a fresh snapshot twice a second while the timer runs,
+  // and every one of them is a new `settings` object. Seeding the draft from
+  // that object on each change wiped whatever the user was in the middle of
+  // typing. The draft is seeded once, when the dialog opens, and belongs to the
+  // user until they save or cancel.
+  const latestSettings = useRef(settings);
+  latestSettings.current = settings;
   useEffect(() => {
-    if (open) {
-      setDraft(settings);
-      setConfirmClear(false);
-    }
-  }, [open, settings]);
+    if (!open) return;
+    setDraft(latestSettings.current);
+    setConfirmClear(false);
+    setConfirmClearNotifications(false);
+  }, [open]);
 
   if (!open) return null;
+
+  const filter = draft.notificationFilter;
+  const setFilter = (patch: Partial<NotificationFilter>) =>
+    setDraft({ ...draft, notificationFilter: { ...filter, ...patch } });
+  const captureOff = !filter.enabled;
+  // What is really happening on the bus, which is not the same as what the
+  // checkbox asks for: the session bus can refuse to hand out a monitor.
+  const captureNotice = describeCapture(captureStatus, settings.notificationFilter.enabled);
 
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
@@ -186,6 +353,105 @@ export function SettingsDialog({
             </fieldset>
 
             <fieldset>
+              <legend>Notification capture</legend>
+              <p className="fieldset-note">
+                Pomodoro can watch the desktop notification service and file a
+                copy of what other apps send, so it can be read after the
+                interval instead of during it. Watching does not hide anything:
+                banners still appear and sounds still play unless you also
+                silence them below. Captured text stays in Pomodoro’s local data
+                on this machine. It is never sent anywhere, and the app makes no
+                network requests. Capture stays off until you turn it on here.
+              </p>
+              <label className="toggle-row">
+                <span>
+                  <strong>Capture desktop notifications</strong>
+                  <small>Off by default. Nothing is watched until this is on.</small>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={filter.enabled}
+                  onChange={(event) => setFilter({ enabled: event.target.checked })}
+                />
+              </label>
+              {captureNotice && (
+                <p className={`capture-status ${captureNotice.tone}`} role="status">
+                  {captureNotice.tone === "warning" && (
+                    <AlertTriangle aria-hidden="true" size={15} />
+                  )}
+                  <span>{captureNotice.text}</span>
+                </p>
+              )}
+              <div className={`setting-row ${captureOff ? "setting-disabled" : ""}`}>
+                <label htmlFor="min-urgency">Minimum urgency</label>
+                <select
+                  id="min-urgency"
+                  value={String(filter.minUrgency)}
+                  disabled={captureOff}
+                  onChange={(event) =>
+                    setFilter({
+                      minUrgency: Number(event.target.value) as
+                        NotificationFilter["minUrgency"],
+                    })
+                  }
+                >
+                  <option value="0">Low and above</option>
+                  <option value="1">Normal and above</option>
+                  <option value="2">Urgent only</option>
+                </select>
+              </div>
+              <label className={`toggle-row ${captureOff ? "setting-disabled" : ""}`}>
+                <span>
+                  <strong>Only during focus</strong>
+                  <small>Ignore anything that arrives outside a focus interval.</small>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={filter.focusOnly}
+                  disabled={captureOff}
+                  onChange={(event) => setFilter({ focusOnly: event.target.checked })}
+                />
+              </label>
+              <AppListEditor
+                id="muted-apps"
+                label="Muted apps"
+                hint="Never captured. Muting wins over priority."
+                items={filter.mutedApps}
+                disabled={captureOff}
+                onChange={(mutedApps) => setFilter({ mutedApps })}
+              />
+              <AppListEditor
+                id="priority-apps"
+                label="Priority apps"
+                hint="Always captured, ignoring minimum urgency and the focus-only rule."
+                items={filter.priorityApps}
+                disabled={captureOff}
+                onChange={(priorityApps) => setFilter({ priorityApps })}
+              />
+              <label className="toggle-row">
+                <span>
+                  <strong>Silence banners during focus</strong>
+                  <small>
+                    Switches the desktop’s own Do Not Disturb on for the length of
+                    each focus interval and switches it back afterwards. This
+                    changes a GNOME setting outside Pomodoro, so it is off by
+                    default. Banners you had already turned off are left alone.
+                  </small>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={draft.silenceBannersDuringFocus}
+                  onChange={(event) =>
+                    setDraft({
+                      ...draft,
+                      silenceBannersDuringFocus: event.target.checked,
+                    })
+                  }
+                />
+              </label>
+            </fieldset>
+
+            <fieldset>
               <legend>Appearance</legend>
               <div className="setting-row">
                 <label htmlFor="theme">Theme</label>
@@ -203,6 +469,43 @@ export function SettingsDialog({
                   <option value="light">Light</option>
                   <option value="dark">Dark</option>
                 </select>
+              </div>
+
+              <div className="setting-stack">
+                <span className="setting-stack-label" id="timer-face-label">
+                  Timer face
+                </span>
+                <p className="setting-hint">
+                  How the remaining time is drawn. Each one trades precision for calm
+                  differently.
+                </p>
+                <div
+                  className="face-picker"
+                  role="group"
+                  aria-labelledby="timer-face-label"
+                >
+                  {TIMER_FACES.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      aria-pressed={draft.timerFace === option.id}
+                      className={`face-option${draft.timerFace === option.id ? " selected" : ""}`}
+                      onClick={() => setDraft({ ...draft, timerFace: option.id })}
+                    >
+                      <span className="face-preview" aria-hidden="true">
+                        <TimerFace
+                          face={option.id}
+                          phase="focus"
+                          remainingSeconds={PREVIEW_REMAINING}
+                          durationSeconds={PREVIEW_DURATION}
+                          phaseLabel="Focus"
+                        />
+                      </span>
+                      <span className="face-name">{option.name}</span>
+                      <span className="face-note">{option.note}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             </fieldset>
 
@@ -225,6 +528,43 @@ export function SettingsDialog({
                 ) : (
                   <button className="secondary-control" type="button" onClick={() => setConfirmClear(true)}>
                     Clear history
+                  </button>
+                )}
+              </div>
+              <div className="data-row">
+                <span>
+                  <strong>Captured notifications</strong>
+                  <small>
+                    {notificationCount === 0
+                      ? "Nothing is filed right now."
+                      : `Removes all ${notificationCount} captured copies, including their message text. Tasks already made from them stay.`}
+                  </small>
+                </span>
+                {confirmClearNotifications ? (
+                  <span className="clear-confirm">
+                    <button
+                      className="text-button"
+                      type="button"
+                      onClick={() => setConfirmClearNotifications(false)}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="danger-button"
+                      type="button"
+                      onClick={() => void onClearNotifications()}
+                    >
+                      Confirm clear
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    className="secondary-control"
+                    type="button"
+                    disabled={notificationCount === 0}
+                    onClick={() => setConfirmClearNotifications(true)}
+                  >
+                    Clear captured
                   </button>
                 )}
               </div>

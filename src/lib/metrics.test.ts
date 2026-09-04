@@ -4,6 +4,7 @@ import {
   formatClock,
   formatCountdown,
   formatDuration,
+  formatRelativeTime,
   getCompletedFocusByTask,
   getCompletedFocusCount,
   getCompletedFocusMinutes,
@@ -247,5 +248,15 @@ describe("formatting", () => {
 
   it("formats a local clock value as zero-padded 24-hour time", () => {
     expect(formatClock(localTime(2026, 8, 2, 5, 7, 59))).toBe("05:07");
+  });
+
+  it("formats relative capture times coarsely and never in the future", () => {
+    const now = 1_800_000_000_000;
+    expect(formatRelativeTime(now, now)).toBe("just now");
+    expect(formatRelativeTime(now - 59_000, now)).toBe("just now");
+    expect(formatRelativeTime(now + 5_000, now)).toBe("just now");
+    expect(formatRelativeTime(now - 12 * 60_000, now)).toBe("12m ago");
+    expect(formatRelativeTime(now - 3 * 3_600_000, now)).toBe("3h ago");
+    expect(formatRelativeTime(now - 2 * 86_400_000, now)).toBe("2d ago");
   });
 });

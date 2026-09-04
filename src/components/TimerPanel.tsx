@@ -1,5 +1,7 @@
+import { useEffect, useState } from "react";
 import { Pause, Play, RotateCcw, SkipForward } from "lucide-react";
-import type { FocusTask, Phase, TimerState } from "../types";
+import type { FocusTask, Phase, TimerFace as TimerFaceId, TimerState } from "../types";
+import { TimerFace } from "./TimerFace";
 
 const phaseLabels: Record<Phase, string> = {
   focus: "Focus",
@@ -11,6 +13,7 @@ interface TimerPanelProps {
   timer: TimerState;
   activeTask: FocusTask | null;
   roundsBeforeLongBreak: number;
+  face: TimerFaceId;
   onSetPhase: (phase: Phase) => void;
   onToggleTimer: () => void;
   onReset: () => void;
@@ -18,17 +21,11 @@ interface TimerPanelProps {
   onAddTask: () => void;
 }
 
-function countdown(seconds: number) {
-  const safe = Math.max(0, Math.ceil(seconds));
-  return `${Math.floor(safe / 60).toString().padStart(2, "0")}:${(safe % 60)
-    .toString()
-    .padStart(2, "0")}`;
-}
-
 export function TimerPanel({
   timer,
   activeTask,
   roundsBeforeLongBreak,
+  face,
   onSetPhase,
   onToggleTimer,
   onReset,
@@ -40,6 +37,32 @@ export function TimerPanel({
       ? ((timer.durationSeconds - timer.remainingSeconds) / timer.durationSeconds) * 100
       : 0;
   const needsTask = timer.phase === "focus" && !activeTask;
+
+  // Skipping a break costs nothing. Skipping a focus interval throws away the
+  // elapsed work — and the control sits next to Reset with the same styling, so
+  // it asks once first. Breaks stay a single click.
+  const [confirmSkip, setConfirmSkip] = useState(false);
+  const skipDiscardsCredit = timer.phase === "focus" && timer.status !== "idle";
+
+  useEffect(() => {
+    setConfirmSkip(false);
+  }, [timer.phase, timer.status]);
+
+  useEffect(() => {
+    if (!confirmSkip) return;
+    const timeout = window.setTimeout(() => setConfirmSkip(false), 4_000);
+    return () => window.clearTimeout(timeout);
+  }, [confirmSkip]);
+
+  const handleSkip = () => {
+    if (skipDiscardsCredit && !confirmSkip) {
+      setConfirmSkip(true);
+      return;
+    }
+    setConfirmSkip(false);
+    onSkip();
+  };
+
   const actionLabel =
     timer.status === "running"
       ? "Pause"
@@ -51,13 +74,12 @@ export function TimerPanel({
 
   return (
     <section className={`timer-panel phase-${timer.phase}`} aria-labelledby="timer-heading">
-      <div className="phase-tabs" role="tablist" aria-label="Timer mode">
+      <div className="phase-tabs" role="group" aria-label="Timer mode">
         {(Object.keys(phaseLabels) as Phase[]).map((phase) => (
           <button
             key={phase}
             type="button"
-            role="tab"
-            aria-selected={timer.phase === phase}
+            aria-pressed={timer.phase === phase}
             disabled={timer.status !== "idle"}
             onClick={() => onSetPhase(phase)}
           >
@@ -85,22 +107,29 @@ export function TimerPanel({
         <h1 id="timer-heading" className="visually-hidden">
           {phaseLabels[timer.phase]} timer
         </h1>
-        <output
-          className="timer-digits"
-          aria-label={`${Math.ceil(timer.remainingSeconds / 60)} minutes remaining`}
-        >
-          {countdown(timer.remainingSeconds)}
-        </output>
-        <div
-          className="progress-track"
-          role="progressbar"
-          aria-label={`${phaseLabels[timer.phase]} progress`}
-          aria-valuemin={0}
-          aria-valuemax={timer.durationSeconds}
-          aria-valuenow={Math.round(timer.durationSeconds - timer.remainingSeconds)}
-        >
-          <span style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} />
-        </div>
+        <TimerFace
+          face={face}
+          phase={timer.phase}
+          remainingSeconds={timer.remainingSeconds}
+          durationSeconds={timer.durationSeconds}
+          phaseLabel={phaseLabels[timer.phase]}
+        />
+        {face === "ring" || face === "bar" ? null : (
+          <div
+            className="progress-track"
+            role="progressbar"
+            aria-label={`${phaseLabels[timer.phase]} progress`}
+            aria-valuemin={0}
+            aria-valuemax={timer.durationSeconds}
+            aria-valuenow={Math.round(timer.durationSeconds - timer.remainingSeconds)}
+          >
+            <span
+              style={{
+                transform: `scaleX(${Math.min(100, Math.max(0, progress)) / 100})`,
+              }}
+            />
+          </div>
+        )}
 
         <div className="session-task">
           {timer.phase === "focus" ? (
@@ -151,12 +180,13 @@ export function TimerPanel({
             <RotateCcw aria-hidden="true" size={17} /> Reset
           </button>
           <button
-            className="secondary-control"
+            className={`secondary-control${confirmSkip ? " confirming" : ""}`}
             type="button"
-            onClick={onSkip}
+            onClick={handleSkip}
             title={timer.phase === "focus" ? "End focus without credit" : "Skip this break"}
           >
-            <SkipForward aria-hidden="true" size={17} /> Skip
+            <SkipForward aria-hidden="true" size={17} />{" "}
+            {confirmSkip ? "Discard session?" : "Skip"}
           </button>
         </div>
         <p className="shortcut-hint">

@@ -26,8 +26,8 @@
   --focus-ring: #98452b;
   --shadow-menu: 0 2px 8px rgb(37 33 29 / 14%);
 
-  --toolbar-height: 48px;
-  --sidebar-width: 288px;
+  --toolbar-height: 52px;
+  --sidebar-width: 256px;
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
@@ -101,6 +101,11 @@ body,
   margin: 0;
 }
 
+html,
+body {
+  min-height: 100dvh;
+}
+
 body {
   overflow: hidden;
   background: var(--canvas);
@@ -121,6 +126,21 @@ button,
 summary,
 select {
   cursor: pointer;
+}
+
+button,
+summary {
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    opacity 140ms ease,
+    transform 100ms ease;
+}
+
+button:active:not(:disabled),
+summary:active {
+  transform: translateY(1px);
 }
 
 button:disabled,
@@ -192,7 +212,7 @@ summary:focus-visible,
   gap: 8px;
   min-width: 0;
   min-height: var(--toolbar-height);
-  padding: 4px 8px 4px 12px;
+  padding: 4px 10px 4px 16px;
   background: var(--surface);
   border-bottom: 1px solid var(--divider);
 }
@@ -208,7 +228,7 @@ summary:focus-visible,
 
 .app-name {
   flex: 0 0 auto;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 650;
   letter-spacing: -0.01em;
 }
@@ -266,7 +286,7 @@ summary:focus-visible,
 
 .sidebar {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) minmax(144px, 34%);
+  grid-template-rows: minmax(0, 1fr) minmax(120px, 26%) minmax(124px, 28%);
   width: 100%;
   height: 100%;
   min-width: 0;
@@ -715,12 +735,12 @@ textarea::placeholder {
   color: var(--text);
 }
 
-.phase-tabs button[aria-selected="true"] {
+.phase-tabs button[aria-pressed="true"] {
   color: var(--text);
   font-weight: 650;
 }
 
-.phase-tabs button[aria-selected="true"]::after {
+.phase-tabs button[aria-pressed="true"]::after {
   position: absolute;
   right: 0;
   bottom: -1px;
@@ -776,7 +796,7 @@ textarea::placeholder {
   text-align: center;
 }
 
-.timer-digits {
+.face-digits {
   display: block;
   max-width: 100%;
   color: var(--text);
@@ -801,9 +821,11 @@ textarea::placeholder {
 
 .progress-track > span {
   display: block;
+  width: 100%;
   height: 100%;
   background: var(--phase-accent);
-  transition: width 160ms linear;
+  transform-origin: left center;
+  transition: transform 160ms linear;
 }
 
 .session-task {
@@ -1109,7 +1131,7 @@ kbd {
 
 .dialog {
   width: min(100%, 480px);
-  max-height: calc(100vh - 48px);
+  max-height: calc(100dvh - 48px);
   overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--divider);
@@ -1446,7 +1468,7 @@ input[type="radio"] {
     padding-top: 10px;
   }
 
-  .timer-digits {
+  .face-digits {
     font-size: clamp(58px, 19vw, 92px);
   }
 
@@ -1510,7 +1532,23 @@ input[type="radio"] {
   }
 
   .dialog {
-    max-height: calc(100vh - 20px);
+    max-height: calc(100dvh - 20px);
+  }
+
+  .icon-button,
+  .row-menu > summary,
+  .estimate-stepper button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .primary-control,
+  .secondary-control,
+  .small-primary,
+  .text-button,
+  .danger-button,
+  .category-choice label {
+    min-height: 44px;
   }
 
   .capture-dialog {
@@ -1578,7 +1616,7 @@ input[type="radio"] {
     padding-bottom: 10px;
   }
 
-  .timer-digits {
+  .face-digits {
     font-size: clamp(58px, 16vh, 88px);
   }
 
@@ -1657,5 +1695,860 @@ input[type="radio"] {
   .small-primary,
   .danger-button {
     forced-color-adjust: none;
+  }
+}
+
+/* ── Paused state ───────────────────────────────────────────────────────────
+   A paused timer used to differ from a running one only by the word on the
+   primary button. Glanced at from across a desk, a stalled session read as a
+   working one. The clock now settles into a quiet muted state and the progress
+   fill goes flat, so the state is legible without perpetual motion. */
+.status-paused .timer-face {
+  color: var(--text-muted);
+  opacity: 0.72;
+}
+
+.status-paused .progress-track > span {
+  background: var(--text-muted);
+}
+
+/* ── Destructive confirmation ───────────────────────────────────────────────
+   Second press of Skip during focus. Carries danger colour plus changed label,
+   so the shift does not rely on colour alone. */
+.secondary-control.confirming {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--on-danger);
+}
+
+.secondary-control.confirming:hover:not(:disabled) {
+  background: var(--danger-hover);
+  border-color: var(--danger-hover);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-paused .timer-face {
+    animation: none;
+    opacity: 0.72;
+  }
+}
+
+@media (forced-colors: active) {
+  .secondary-control.confirming {
+    border-width: 2px;
+  }
+}
+
+/* ── Notification triage ────────────────────────────────────────────────────
+   A third sidebar section, filed under the interruption inbox. It reuses the
+   task-row skeleton — check, content, overflow menu — so a captured
+   notification reads as one more thing on the list rather than an alert.
+   Urgency stays plain text so metadata remains useful without badge clutter. */
+.sidebar.captures-quiet {
+  grid-template-rows: minmax(0, 1fr) minmax(144px, 34%) auto;
+}
+
+.notice-section {
+  border-top: 1px solid var(--divider);
+}
+
+.section-count {
+  flex: 0 0 auto;
+  margin-right: auto;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+
+.notice-list {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.notice-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) 36px;
+  min-width: 0;
+  align-items: stretch;
+  border-bottom: 1px solid var(--divider);
+}
+
+.notice-row:hover {
+  background: var(--surface-hover);
+}
+
+.notice-row:has(.row-menu[open]) {
+  z-index: 10;
+}
+
+.notice-row:last-child .menu-popover {
+  top: auto;
+  bottom: 40px;
+}
+
+.notice-check {
+  display: grid;
+  min-width: 0;
+  padding: 11px 0 0;
+  align-content: start;
+  justify-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: var(--text-muted);
+}
+
+.notice-check:hover {
+  color: var(--focus);
+}
+
+.notice-content {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  padding: 9px 4px 10px 0;
+}
+
+.notice-content > p {
+  margin: 0;
+  min-width: 0;
+}
+
+.notice-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.notice-app {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notice-meta time {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.notice-urgency {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.notice-urgency.urgent {
+  color: var(--focus);
+  font-weight: 650;
+}
+
+.notice-during {
+  flex: 0 0 auto;
+  font-style: italic;
+  white-space: nowrap;
+}
+
+.notice-summary {
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notice-body {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+/* Once triaged the row has been dealt with, so the message text folds away.
+   Less to read, and less private text left sitting on screen. */
+.notice-row.triaged .notice-summary {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.notice-row.triaged .notice-body {
+  display: none;
+}
+
+.notice-menu {
+  min-width: 186px;
+}
+
+.notice-menu.confirming {
+  width: 214px;
+  min-width: 0;
+}
+
+.menu-note {
+  margin: 0;
+  padding: 6px 9px 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.notice-group > summary {
+  min-height: 40px;
+  padding: 10px 16px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* ── Notification filter controls ─────────────────────────────────────────── */
+.fieldset-note {
+  margin: 0 0 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.capture-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  background: var(--surface-hover);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+/* The icon travels with the words: colour alone never carries the warning. */
+.capture-status.warning {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.capture-status svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.notice-list .capture-status {
+  margin: 8px 16px;
+}
+
+.setting-disabled {
+  opacity: 0.58;
+}
+
+.app-list {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  padding: 10px 0;
+}
+
+.app-list > label {
+  font-weight: 600;
+}
+
+.app-list > small {
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.app-list-entry {
+  display: flex;
+  min-width: 0;
+  gap: 8px;
+}
+
+.app-list-entry input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.app-list-entry .secondary-control {
+  flex: 0 0 auto;
+}
+
+.app-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.app-chips li {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 30px;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 3px 2px 10px;
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+
+.app-chips li > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.app-chips li > button {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  padding: 0;
+  place-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+}
+
+.app-chips li > button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--danger);
+}
+
+@media (max-width: 479px) {
+  .app-list-entry {
+    flex-wrap: wrap;
+  }
+
+  .app-list-entry .secondary-control {
+    width: 100%;
+  }
+}
+
+/* The sidebar loses a whole section's worth of height on a short window. The
+   notification list keeps a workable minimum by giving ground to the two
+   sections above it rather than collapsing to a scrollbar. */
+@media (max-height: 619px) {
+  .sidebar {
+    grid-template-rows: minmax(0, 1fr) minmax(104px, 24%) minmax(112px, 26%);
+  }
+}
+
+@media (forced-colors: active) {
+  .notice-urgency i {
+    forced-color-adjust: none;
+    border-color: CanvasText;
+  }
+
+  .notice-urgency.normal i,
+  .notice-urgency.urgent i {
+    background: CanvasText;
+    border-color: CanvasText;
+  }
+
+  .notice-urgency.urgent {
+    text-decoration: underline;
+  }
+
+  .section-count,
+  .notice-during,
+  .app-chips li {
+    border-color: ButtonBorder;
+  }
+}
+
+/* ── Timer faces ────────────────────────────────────────────────────────────
+   Five instruments for one reading, ordered by how much precision each gives
+   up: digits (exact) → ring / bar (proportion) → pips (countable) → words
+   (ambient). Each face lets one element dominate and demotes the rest; a face
+   where everything competes is just decoration. All of them inherit the muted
+   treatment under .status-paused via .timer-face. */
+.timer-face {
+  display: block;
+  max-width: 100%;
+  color: var(--text);
+}
+
+/* Ring — proportion read radially. The readout sits inside so the arc, not the
+   number, is what the eye lands on first. */
+.face-ring {
+  position: relative;
+  display: grid;
+  place-items: center;
+  inline-size: clamp(180px, 30vh, 260px);
+  aspect-ratio: 1;
+  margin-inline: auto;
+}
+
+.face-ring svg {
+  inline-size: 100%;
+  block-size: 100%;
+  /* Start the depletion at twelve o'clock rather than three. */
+  rotate: -90deg;
+}
+
+.ring-track,
+.ring-progress {
+  fill: none;
+  stroke-width: 6;
+  stroke-linecap: round;
+}
+
+.ring-track {
+  stroke: var(--divider);
+}
+
+.ring-progress {
+  stroke: var(--phase-accent, var(--focus));
+  transition: stroke-dashoffset 160ms linear;
+}
+
+.ring-readout {
+  position: absolute;
+  font-family: "Ubuntu Mono", "Liberation Mono", monospace;
+  font-size: clamp(30px, 6vh, 44px);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+}
+
+/* Bar — the same proportion read linearly. Deliberately thick: this is the
+   clock, not the thin secondary track that sits under the other faces. */
+.face-bar {
+  display: grid;
+  gap: 14px;
+  inline-size: min(420px, 84%);
+  margin-inline: auto;
+}
+
+.bar-shell {
+  display: block;
+  block-size: 26px;
+  overflow: hidden;
+  background: var(--divider);
+  border-radius: var(--radius-sm);
+}
+
+.bar-fill {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  background: var(--phase-accent, var(--focus));
+  transform-origin: left center;
+  transition: transform 160ms linear;
+}
+
+.bar-readout {
+  font-family: "Ubuntu Mono", "Liberation Mono", monospace;
+  font-size: clamp(28px, 5vh, 40px);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+}
+
+/* Pips — one mark per minute, so the remainder can be counted rather than
+   read. */
+.face-pips {
+  display: grid;
+  gap: 14px;
+  justify-items: center;
+}
+
+.pip-grid {
+  display: flex;
+  max-inline-size: min(420px, 86%);
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 7px;
+}
+
+.pip {
+  inline-size: 13px;
+  block-size: 13px;
+  border: 1px solid var(--divider);
+  border-radius: 2px;
+}
+
+.pip.lit {
+  background: var(--phase-accent, var(--focus));
+  border-color: var(--phase-accent, var(--focus));
+}
+
+.pip-readout {
+  font-family: "Ubuntu Mono", "Liberation Mono", monospace;
+  font-size: clamp(24px, 4.5vh, 34px);
+  font-variant-numeric: tabular-nums;
+}
+
+.pip-readout em {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+/* Words — no numerals at all. Precision is what makes a clock urgent, so the
+   calmest face simply declines to be precise. */
+.face-words {
+  max-inline-size: 16ch;
+  margin-inline: auto;
+  font-size: clamp(30px, 5.4vw, 52px);
+  font-weight: 300;
+  letter-spacing: -0.02em;
+  line-height: 1.16;
+  text-wrap: balance;
+}
+
+.status-paused .ring-progress,
+.status-paused .bar-fill,
+.status-paused .pip.lit {
+  background: var(--text-muted);
+  stroke: var(--text-muted);
+  border-color: var(--text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ring-progress,
+  .bar-fill {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .pip.lit,
+  .bar-fill {
+    background: Highlight;
+    border-color: Highlight;
+  }
+
+  .ring-progress {
+    stroke: Highlight;
+  }
+}
+
+/* ── Timer face picker ──────────────────────────────────────────────────────
+   Each option renders the real face component at 15:00 of a 25:00 interval, so
+   the choice is made by looking rather than by reading a label and guessing.
+   The previews are scaled down with a transform on a fixed-height stage, which
+   keeps them from dragging the dialog's layout around. */
+.setting-stack {
+  display: grid;
+  gap: 6px;
+  padding: 12px 0 4px;
+}
+
+.setting-stack-label {
+  font-weight: 600;
+}
+
+.setting-hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.face-picker {
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+}
+
+.face-option {
+  display: grid;
+  gap: 2px;
+  padding: 10px 8px;
+  background: transparent;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  text-align: center;
+}
+
+.face-option:hover {
+  background: var(--surface-hover);
+}
+
+.face-option.selected {
+  border-color: var(--focus);
+  box-shadow: inset 0 0 0 1px var(--focus);
+}
+
+.face-preview {
+  display: grid;
+  block-size: 62px;
+  place-items: center;
+  overflow: hidden;
+  /* The faces are sized for the main stage; shrink the whole thing rather than
+     re-specifying every font size and dimension for a second context. */
+  container-type: inline-size;
+}
+
+.face-preview > .timer-face {
+  scale: 0.34;
+}
+
+.face-preview > .face-ring {
+  scale: 0.28;
+}
+
+.face-preview > .face-words {
+  scale: 0.42;
+}
+
+.face-preview > .face-analog,
+.face-preview > .face-orbit {
+  scale: 0.26;
+}
+
+.face-preview > .face-vessel {
+  scale: 0.3;
+}
+
+.face-preview > .face-arc {
+  scale: 0.38;
+}
+
+.face-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.face-note {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+@media (forced-colors: active) {
+  .face-option.selected {
+    border-width: 2px;
+    outline: 2px solid Highlight;
+  }
+}
+
+/* ── Timer faces, second set ────────────────────────────────────────────────
+   Analog, vessel, arc, blocks and orbit. Same rule as the first set: one
+   element dominates, everything else is demoted to a muted readout. Gauge
+   guidance is explicit that a dial without a figure beside it is not
+   sufficient, so each keeps its clock. */
+.face-analog {
+  inline-size: clamp(190px, 32vh, 268px);
+  aspect-ratio: 1;
+  margin-inline: auto;
+}
+
+.face-analog svg,
+.face-orbit svg {
+  inline-size: 100%;
+  block-size: 100%;
+}
+
+.dial-plate {
+  fill: var(--surface);
+  stroke: var(--divider);
+  stroke-width: 1.5;
+}
+
+.dial-tick {
+  stroke: var(--divider);
+  stroke-width: 1.5;
+}
+
+.dial-tick.major {
+  stroke: var(--text-muted);
+  stroke-width: 2.5;
+}
+
+.dial-wedge {
+  fill: var(--phase-accent, var(--focus));
+  opacity: 0.9;
+}
+
+.dial-hand {
+  stroke: var(--text);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+
+.dial-pin {
+  fill: var(--text);
+}
+
+/* Vessel — a quantity draining, not a number decrementing. */
+.face-vessel {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+}
+
+.vessel-shell {
+  display: flex;
+  align-items: flex-end;
+  inline-size: clamp(84px, 13vh, 116px);
+  block-size: clamp(150px, 26vh, 220px);
+  overflow: hidden;
+  border: 2px solid var(--control-border);
+  border-radius: var(--radius-lg);
+}
+
+.vessel-fill {
+  inline-size: 100%;
+  block-size: 100%;
+  background: var(--phase-accent, var(--focus));
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  transform-origin: center bottom;
+  transition: transform 160ms linear;
+}
+
+/* Arc — half the ink of the ring; the readout fills the hollow. */
+.face-arc {
+  position: relative;
+  display: grid;
+  inline-size: min(400px, 86%);
+  margin-inline: auto;
+}
+
+.face-arc svg {
+  inline-size: 100%;
+  block-size: auto;
+}
+
+.arc-track,
+.arc-progress {
+  fill: none;
+  stroke-width: 8;
+  stroke-linecap: round;
+}
+
+.arc-track {
+  stroke: var(--divider);
+}
+
+.arc-progress {
+  stroke: var(--phase-accent, var(--focus));
+  transition: stroke-dashoffset 160ms linear;
+}
+
+.arc-readout {
+  position: absolute;
+  inset-block-end: 0;
+  inline-size: 100%;
+  font-family: "Ubuntu Mono", "Liberation Mono", monospace;
+  font-size: clamp(28px, 5vh, 42px);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  text-align: center;
+}
+
+/* Blocks — twelve proportional segments, so every interval length reads at the
+   same glance-weight. */
+.face-blocks {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.block-row {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 6px;
+  inline-size: min(430px, 62vw);
+}
+
+.block {
+  min-inline-size: 0;
+  block-size: 44px;
+  background: var(--divider);
+  border-radius: 3px;
+}
+
+.block.lit {
+  background: var(--phase-accent, var(--focus));
+}
+
+/* Orbit — position alone carries the reading. */
+.face-orbit {
+  display: grid;
+  justify-items: center;
+  gap: 22px;
+  inline-size: clamp(180px, 30vh, 250px);
+  margin-inline: auto;
+}
+
+.orbit-path {
+  fill: none;
+  stroke: var(--divider);
+  stroke-width: 1.5;
+}
+
+.orbit-dot {
+  fill: var(--phase-accent, var(--focus));
+}
+
+.block-readout,
+.vessel-readout,
+.orbit-readout {
+  font-family: "Ubuntu Mono", "Liberation Mono", monospace;
+  font-size: clamp(24px, 4.4vh, 34px);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+}
+
+.status-paused .dial-wedge,
+.status-paused .vessel-fill,
+.status-paused .block.lit,
+.status-paused .orbit-dot {
+  background: var(--text-muted);
+  fill: var(--text-muted);
+}
+
+.status-paused .arc-progress {
+  stroke: var(--text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vessel-fill,
+  .arc-progress {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .dial-wedge,
+  .orbit-dot {
+    fill: Highlight;
+  }
+
+  .arc-progress {
+    stroke: Highlight;
+  }
+
+  .vessel-fill,
+  .block.lit {
+    background: Highlight;
   }
 }
