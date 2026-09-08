@@ -12,6 +12,17 @@ pub const MAX_URGENCY: u8 = 2;
 /// bound.
 pub const NOTIFICATION_RETENTION: usize = 200;
 
+/// Oldest-first cap on session history. Roughly two years at six intervals a
+/// day; beyond that the oldest records are dropped on write rather than the
+/// store growing forever.
+pub const SESSION_RETENTION: usize = 5_000;
+
+/// How far back the sessions in a [`AppData::snapshot`] reach. The ledger shows
+/// today and the metrics look back a week, so shipping every record ever
+/// written to the UI on every update was cost for nothing. Eight days rather
+/// than seven so a DST change or a late night cannot clip the seventh day.
+pub const SNAPSHOT_SESSION_WINDOW_MS: i64 = 8 * 24 * 60 * 60 * 1_000;
+
 /// Upper bounds on stored notification text. A sender can put an arbitrarily
 /// long string in any of these fields; without a cap one hostile or merely
 /// careless app could grow the local store without limit. The limits are far
@@ -449,10 +460,28 @@ impl AppData {
     /// Produces a display snapshot with a current countdown. Phase completion is
     /// deliberately handled by [`Self::tick`] so callers can notify and persist
     /// exactly once when a transition occurs.
+    ///
+    /// Only the last [`SNAPSHOT_SESSION_WINDOW_MS`] of session history is
+    /// included: that is all the UI reads, and the full history stays on disk.
     pub fn snapshot(&self, now_ms: i64) -> Self {
-        let mut snapshot = self.clone();
-        snapshot.timer.normalize_remaining(now_ms);
-        snapshot
+        let oldest = now_ms.saturating_sub(SNAPSHOT_SESSION_WINDOW_MS);
+        let mut timer = self.timer.clone();
+        timer.normalize_remaining(now_ms);
+        Self {
+            settings: self.settings.clone(),
+            timer,
+            tasks: self.tasks.clone(),
+            interruptions: self.interruptions.clone(),
+            sessions: self
+                .sessions
+                .iter()
+                .filter(|session| session.started_at >= oldest)
+                .cloned()
+                .collect(),
+            notifications: self.notifications.clone(),
+            banner_restore: self.banner_restore,
+            capture_status: self.capture_status.clone(),
+        }
     }
 
     /// Starts an idle timer or resumes a paused timer.
@@ -982,6 +1011,10 @@ impl AppData {
             ended_at: now_ms,
             outcome,
         });
+        if self.sessions.len() > SESSION_RETENTION {
+            let excess = self.sessions.len() - SESSION_RETENTION;
+            self.sessions.drain(..excess);
+        }
     }
 
     fn credit_active_task(&mut self) {
@@ -1624,6 +1657,53 @@ mod tests {
         // ...but a monitor that ran last time says nothing about this run.
         let reloaded: AppData = serde_json::from_value(json).unwrap();
         assert_eq!(reloaded.capture_status, CaptureStatus::off());
+    }
+
+    #[test]
+    fn session_history_is_capped_and_the_snapshot_ships_only_the_recent_week() {
+        let mut data = AppData::default();
+        data.settings.notification_filter = capturing_filter();
+        let day = 24 * 60 * 60 * 1_000;
+
+        // Fill past the cap, one skipped break a day, oldest first.
+        for index in 0..(SESSION_RETENTION as i64 + 25) {
+            let now = index * day;
+            data.set_phase(Phase::ShortBreak, now);
+            data.start_or_resume(now);
+            data.skip(now + 1_000);
+        }
+        assert_eq!(
+            data.sessions.len(),
+            SESSION_RETENTION,
+            "the oldest are dropped"
+        );
+        assert_eq!(
+            data.sessions[0].started_at,
+            25 * day,
+            "dropping happens at the old end, never the new one"
+        );
+
+        // The snapshot carries only what the UI can show.
+        let latest = data.sessions.last().unwrap().started_at;
+        let snapshot = data.snapshot(latest);
+        assert!(
+            snapshot.sessions.len() < 10,
+            "got {}",
+            snapshot.sessions.len()
+        );
+        assert!(snapshot
+            .sessions
+            .iter()
+            .all(|session| session.started_at >= latest - SNAPSHOT_SESSION_WINDOW_MS));
+        assert!(snapshot.sessions.contains(data.sessions.last().unwrap()));
+
+        // Everything else is intact, and the countdown is normalised.
+        assert_eq!(snapshot.tasks, data.tasks);
+        assert_eq!(snapshot.settings, data.settings);
+        assert_eq!(snapshot.notifications, data.notifications);
+        assert_eq!(snapshot.timer.status, data.timer.status);
+        // The full history is still on disk.
+        assert_eq!(data.sessions.len(), SESSION_RETENTION);
     }
 
     #[test]

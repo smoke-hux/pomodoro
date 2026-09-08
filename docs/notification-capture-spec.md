@@ -182,8 +182,22 @@ Capture defaults to **off**. The user opts in explicitly in Settings.
 
 ## IPC commands
 
-Every command returns the full `AppSnapshot`, matching the existing convention,
-and broadcasts `state-changed`.
+`get_snapshot` is the one read: the window calls it once on load. Every other
+command changes state and returns nothing; the backend broadcasts the new
+`AppSnapshot` once on `state-changed`, which is the single channel for every
+change whether it came from the window, the tray, the clock, or the bus. A
+command used to return the snapshot as well, so each click serialised the whole
+store twice and the window had to guess which copy was newer.
+
+The window never polls. It counts the timer down locally from `timer.endsAt`
+(see `src/lib/useCountdown.ts`) and the backend only speaks when something other
+than the clock changes — a phase completing, a task edited, a notification
+filed. Before this the window asked for the full store every second while the
+timer ran: at the retention caps that was 862 KB per tick to move one number.
+
+`AppSnapshot.sessions` carries only the last eight days. The UI shows today and
+looks back a week; the full history stays on disk, capped at
+`SESSION_RETENTION` (5,000) records, oldest dropped first.
 
 | Command | Args | Effect |
 |---------|------|--------|

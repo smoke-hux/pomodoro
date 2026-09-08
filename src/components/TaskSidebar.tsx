@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import {
   Check,
   CheckCircle2,
@@ -38,7 +38,7 @@ interface TaskSidebarProps {
   onOpenSettings: () => void;
 }
 
-export function TaskSidebar({
+function TaskSidebarComponent({
   tasks,
   interruptions,
   notifications,
@@ -324,3 +324,11 @@ export function TaskSidebar({
     </aside>
   );
 }
+
+/**
+ * Memoised: the window re-renders every second while the timer runs, and this
+ * component has nothing to do with the countdown. Its props are stable
+ * callbacks and slices of the snapshot, so it only re-renders when something
+ * it shows actually changed.
+ */
+export const TaskSidebar = memo(TaskSidebarComponent);

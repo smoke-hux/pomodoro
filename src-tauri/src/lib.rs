@@ -6,7 +6,7 @@ mod storage;
 use std::{
     sync::{
         atomic::{AtomicI64, AtomicI8, Ordering},
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
     },
     thread,
     time::Duration,
@@ -37,10 +37,58 @@ struct RuntimeState {
     /// When the oldest unsaved captured notification arrived, or 0 for none.
     notifications_dirty_since: AtomicI64,
     /// The last banner state [`sync_quiet`] acted on: `1` quiet, `0` normal,
-    /// `-1` not yet decided. Reconciliation runs twice a second, and asking the
-    /// desktop what its banner setting is means spawning a process; this makes
-    /// that happen once per transition rather than once per tick.
+    /// `-1` not yet decided. Asking the desktop what its banner setting is
+    /// means spawning a process; this makes that happen once per transition
+    /// rather than once per wake-up.
     quiet_desire: AtomicI8,
+    /// What the reconciliation thread sleeps on. Anything that changes the
+    /// timer or files a notification calls [`Self::nudge`] so the thread
+    /// re-evaluates immediately instead of at its next scheduled wake-up.
+    wake: Condvar,
+    wake_lock: Mutex<()>,
+}
+
+/// While a phase is counting down the thread wakes at least this often, so a
+/// completion is never late by more than this even if the monotonic clock
+/// stood still across a suspend.
+const RUNNING_WAKE: Duration = Duration::from_secs(1);
+/// With nothing counting down and nothing waiting to be written there is
+/// nothing to do. A long ceiling rather than no ceiling, as a backstop.
+const IDLE_WAKE: Duration = Duration::from_secs(30);
+
+impl RuntimeState {
+    /// Wakes the reconciliation thread.
+    fn nudge(&self) {
+        self.wake.notify_all();
+    }
+
+    /// How long the reconciliation thread can sleep before something needs it.
+    ///
+    /// Running: until the deadline, capped at [`RUNNING_WAKE`]. Idle with a
+    /// pending notification write: until that is due. Otherwise: a long time.
+    /// The old loop woke twice a second, all day, whether or not anything was
+    /// counting down.
+    fn next_wait(&self, now_ms: i64) -> Duration {
+        let running_deadline = self
+            .data
+            .lock()
+            .ok()
+            .filter(|data| data.timer.status == TimerStatus::Running)
+            .and_then(|data| data.timer.ends_at);
+        if let Some(ends_at) = running_deadline {
+            let until = u64::try_from(ends_at.saturating_sub(now_ms)).unwrap_or(0);
+            return Duration::from_millis(until).min(RUNNING_WAKE);
+        }
+
+        let dirty_since = self.notifications_dirty_since.load(Ordering::Acquire);
+        if dirty_since != 0 {
+            let due = dirty_since.saturating_add(NOTIFICATION_FLUSH_MS);
+            let until = u64::try_from(due.saturating_sub(now_ms)).unwrap_or(0);
+            return Duration::from_millis(until).min(IDLE_WAKE);
+        }
+
+        IDLE_WAKE
+    }
 }
 
 impl RuntimeState {
@@ -113,8 +161,11 @@ fn notify_boundary(app: &AppHandle, completed: Phase, snapshot: &AppData) {
     let _ = app.notification().builder().title(title).body(body).show();
 }
 
+/// Broadcasts the new state to the window. This is the one channel through
+/// which the UI learns anything: commands do not return the state as well, so
+/// each change is serialised and sent once, not twice.
 fn publish(app: &AppHandle, snapshot: &AppData) {
-    let _ = app.emit("state-changed", snapshot.clone());
+    let _ = app.emit("state-changed", snapshot);
 }
 
 /// Files an observed notification, persists it and broadcasts the new state.
@@ -145,6 +196,7 @@ fn record_notification(app: &AppHandle, event: notifications::NotifyEvent) {
     // The write is deferred; the UI is not. A notification appears in the inbox
     // the moment it is filed, and reaches disk within NOTIFICATION_FLUSH_MS.
     state.mark_notifications_dirty(now);
+    state.nudge();
     publish(app, &snapshot);
 }
 
@@ -220,26 +272,30 @@ fn sync_listener(app: &AppHandle, state: &RuntimeState, enabled: bool) {
     );
 }
 
-fn reconcile(state: &RuntimeState, app: &AppHandle) -> Result<AppData, String> {
+/// Moves the timer forward to `now`, and only if a phase completed persists,
+/// broadcasts and alerts. Nothing is cloned or serialised on the common path
+/// where nothing happened, which is nearly every wake-up.
+fn advance(state: &RuntimeState, app: &AppHandle) -> Result<(), String> {
     let now = now_ms();
     let mut data = lock_data(state)?;
     let completed = data.tick(now);
     let quiet_changed = sync_quiet(state, &mut data, now);
-    if completed.is_some() || quiet_changed {
-        state.store.save(&data)?;
-        state.clear_notifications_dirty();
+    if completed.is_none() && !quiet_changed {
+        return Ok(());
     }
+    state.store.save(&data)?;
+    state.clear_notifications_dirty();
     let snapshot = data.snapshot(now);
     drop(data);
 
+    publish(app, &snapshot);
     if let Some(phase) = completed {
-        publish(app, &snapshot);
         notify_boundary(app, phase, &snapshot);
     }
-    Ok(snapshot)
+    Ok(())
 }
 
-fn mutate<F>(state: &RuntimeState, app: &AppHandle, action: F) -> Result<AppData, String>
+fn mutate<F>(state: &RuntimeState, app: &AppHandle, action: F) -> Result<(), String>
 where
     F: FnOnce(&mut AppData, i64) -> Result<(), String>,
 {
@@ -254,14 +310,17 @@ where
     let snapshot = data.snapshot(now);
     drop(data);
 
+    // The timer may have started, stopped or moved; the sleeping thread needs
+    // to recompute how long it can wait.
+    state.nudge();
     publish(app, &snapshot);
     if let Some(phase) = completed {
         notify_boundary(app, phase, &snapshot);
     }
-    Ok(snapshot)
+    Ok(())
 }
 
-fn toggle_timer_impl(state: &RuntimeState, app: &AppHandle) -> Result<AppData, String> {
+fn toggle_timer_impl(state: &RuntimeState, app: &AppHandle) -> Result<(), String> {
     mutate(state, app, |data, now| {
         if data.timer.status == TimerStatus::Running {
             data.pause(now);
@@ -275,18 +334,22 @@ fn toggle_timer_impl(state: &RuntimeState, app: &AppHandle) -> Result<AppData, S
     })
 }
 
+/// The one command that returns state: the window asks once, on load, and
+/// follows `state-changed` from then on.
 #[tauri::command]
 fn get_snapshot(state: State<'_, RuntimeState>, app: AppHandle) -> Result<AppData, String> {
-    reconcile(&state, &app)
+    advance(&state, &app)?;
+    let data = lock_data(&state)?;
+    Ok(data.snapshot(now_ms()))
 }
 
 #[tauri::command]
-fn toggle_timer(state: State<'_, RuntimeState>, app: AppHandle) -> Result<AppData, String> {
+fn toggle_timer(state: State<'_, RuntimeState>, app: AppHandle) -> Result<(), String> {
     toggle_timer_impl(&state, &app)
 }
 
 #[tauri::command]
-fn reset_timer(state: State<'_, RuntimeState>, app: AppHandle) -> Result<AppData, String> {
+fn reset_timer(state: State<'_, RuntimeState>, app: AppHandle) -> Result<(), String> {
     mutate(&state, &app, |data, now| {
         data.reset(now);
         Ok(())
@@ -294,7 +357,7 @@ fn reset_timer(state: State<'_, RuntimeState>, app: AppHandle) -> Result<AppData
 }
 
 #[tauri::command]
-fn skip_phase(state: State<'_, RuntimeState>, app: AppHandle) -> Result<AppData, String> {
+fn skip_phase(state: State<'_, RuntimeState>, app: AppHandle) -> Result<(), String> {
     mutate(&state, &app, |data, now| {
         data.skip(now);
         Ok(())
@@ -302,11 +365,7 @@ fn skip_phase(state: State<'_, RuntimeState>, app: AppHandle) -> Result<AppData,
 }
 
 #[tauri::command]
-fn set_phase(
-    phase: Phase,
-    state: State<'_, RuntimeState>,
-    app: AppHandle,
-) -> Result<AppData, String> {
+fn set_phase(phase: Phase, state: State<'_, RuntimeState>, app: AppHandle) -> Result<(), String> {
     mutate(&state, &app, |data, now| {
         if data.timer.status != TimerStatus::Idle {
             return Err("Reset the current interval before changing timer mode.".to_string());
@@ -321,7 +380,7 @@ fn select_task(
     task_id: Option<String>,
     state: State<'_, RuntimeState>,
     app: AppHandle,
-) -> Result<AppData, String> {
+) -> Result<(), String> {
     mutate(&state, &app, move |data, _| {
         if data.timer.phase == Phase::Focus && data.timer.status != TimerStatus::Idle {
             return Err("Finish or reset the current focus before switching tasks.".to_string());
@@ -339,7 +398,7 @@ fn add_task(
     estimate: u32,
     state: State<'_, RuntimeState>,
     app: AppHandle,
-) -> Result<AppData, String> {
+) -> Result<(), String> {
     mutate(&state, &app, move |data, now| {
         let task = data
             .create_task(title, estimate.clamp(1, 16), now)
@@ -361,7 +420,7 @@ fn update_task(
     estimate: u32,
     state: State<'_, RuntimeState>,
     app: AppHandle,
-) -> Result<AppData, String> {
+) -> Result<(), String> {
     mutate(&state, &app, move |data, now| {
         let done = data
             .tasks
@@ -377,11 +436,7 @@ fn update_task(
 }
 
 #[tauri::command]
-fn toggle_task(
-    id: String,
-    state: State<'_, RuntimeState>,
-    app: AppHandle,
-) -> Result<AppData, String> {
+fn toggle_task(id: String, state: State<'_, RuntimeState>, app: AppHandle) -> Result<(), String> {
     mutate(&state, &app, move |data, now| {
         let done = data
             .tasks
@@ -397,11 +452,7 @@ fn toggle_task(
 }
 
 #[tauri::command]
-fn delete_task(
-    id: String,
-    state: State<'_, RuntimeState>,
-    app: AppHandle,
-) -> Result<AppData, String> {
+fn delete_task(id: String, state: State<'_, RuntimeState>, app: AppHandle) -> Result<(), String> {
     mutate(&state, &app, move |data, _| {
         if data.timer.active_task_id.as_deref() == Some(&id)
             && data.timer.status != TimerStatus::Idle
@@ -421,7 +472,7 @@ fn capture_interruption(
     category: InterruptionCategory,
     state: State<'_, RuntimeState>,
     app: AppHandle,
-) -> Result<AppData, String> {
+) -> Result<(), String> {
     mutate(&state, &app, move |data, now| {
         data.capture_interruption(text, category, now)
             .ok_or_else(|| "Write a short note first.".to_string())?;
@@ -435,7 +486,7 @@ fn set_interruption_handled(
     handled: bool,
     state: State<'_, RuntimeState>,
     app: AppHandle,
-) -> Result<AppData, String> {
+) -> Result<(), String> {
     mutate(&state, &app, move |data, _| {
         let item = data
             .interruptions
@@ -452,7 +503,7 @@ fn delete_interruption(
     id: String,
     state: State<'_, RuntimeState>,
     app: AppHandle,
-) -> Result<AppData, String> {
+) -> Result<(), String> {
     mutate(&state, &app, move |data, _| {
         if !data.delete_interruption(&id) {
             return Err("Interruption not found.".to_string());
@@ -466,7 +517,7 @@ fn convert_interruption_to_task(
     id: String,
     state: State<'_, RuntimeState>,
     app: AppHandle,
-) -> Result<AppData, String> {
+) -> Result<(), String> {
     mutate(&state, &app, move |data, now| {
         if !data.interruptions.iter().any(|item| item.id == id) {
             return Err("Interruption not found.".to_string());
@@ -482,13 +533,14 @@ fn update_settings(
     settings: Settings,
     state: State<'_, RuntimeState>,
     app: AppHandle,
-) -> Result<AppData, String> {
-    let snapshot = mutate(&state, &app, move |data, _| {
+) -> Result<(), String> {
+    let enabled = settings.notification_filter.enabled;
+    mutate(&state, &app, move |data, _| {
         data.update_settings(settings);
         Ok(())
     })?;
-    sync_listener(&app, &state, snapshot.settings.notification_filter.enabled);
-    Ok(snapshot)
+    sync_listener(&app, &state, enabled);
+    Ok(())
 }
 
 #[tauri::command]
@@ -497,7 +549,7 @@ fn triage_notification(
     triaged: bool,
     state: State<'_, RuntimeState>,
     app: AppHandle,
-) -> Result<AppData, String> {
+) -> Result<(), String> {
     mutate(&state, &app, move |data, _| {
         if !data.set_notification_triaged(&id, triaged) {
             return Err("Notification not found.".to_string());
@@ -511,7 +563,7 @@ fn convert_notification(
     id: String,
     state: State<'_, RuntimeState>,
     app: AppHandle,
-) -> Result<AppData, String> {
+) -> Result<(), String> {
     mutate(&state, &app, move |data, now| {
         if !data
             .notifications
@@ -533,7 +585,7 @@ fn delete_notification(
     id: String,
     state: State<'_, RuntimeState>,
     app: AppHandle,
-) -> Result<AppData, String> {
+) -> Result<(), String> {
     mutate(&state, &app, move |data, _| {
         if !data.delete_notification(&id) {
             return Err("Notification not found.".to_string());
@@ -543,7 +595,7 @@ fn delete_notification(
 }
 
 #[tauri::command]
-fn clear_notifications(state: State<'_, RuntimeState>, app: AppHandle) -> Result<AppData, String> {
+fn clear_notifications(state: State<'_, RuntimeState>, app: AppHandle) -> Result<(), String> {
     mutate(&state, &app, |data, _| {
         data.clear_notifications();
         Ok(())
@@ -551,7 +603,7 @@ fn clear_notifications(state: State<'_, RuntimeState>, app: AppHandle) -> Result
 }
 
 #[tauri::command]
-fn clear_history(state: State<'_, RuntimeState>, app: AppHandle) -> Result<AppData, String> {
+fn clear_history(state: State<'_, RuntimeState>, app: AppHandle) -> Result<(), String> {
     mutate(&state, &app, |data, _| {
         data.sessions.clear();
         Ok(())
@@ -649,6 +701,8 @@ pub fn run() {
                 listener: Arc::new(NotificationListener::new()),
                 notifications_dirty_since: AtomicI64::new(0),
                 quiet_desire: AtomicI8::new(-1),
+                wake: Condvar::new(),
+                wake_lock: Mutex::new(()),
             });
             build_tray(app)?;
 
@@ -658,14 +712,19 @@ pub fn run() {
             // If a previous run was killed while it had the desktop's banners
             // turned off, the persisted marker is still set. Reconciling once
             // here puts the desktop back before the first frame is drawn.
-            if let Err(error) = reconcile(&handle.state::<RuntimeState>(), &handle) {
+            if let Err(error) = advance(&handle.state::<RuntimeState>(), &handle) {
                 eprintln!("timer reconciliation failed: {error}");
             }
 
+            // Sleeps until the next deadline, the next pending write, or a
+            // nudge from a command — not on a fixed half-second beat.
             thread::spawn(move || loop {
-                thread::sleep(Duration::from_millis(500));
                 let state = handle.state::<RuntimeState>();
-                if let Err(error) = reconcile(&state, &handle) {
+                let wait = state.next_wait(now_ms());
+                if let Ok(guard) = state.wake_lock.lock() {
+                    let _ = state.wake.wait_timeout(guard, wait);
+                }
+                if let Err(error) = advance(&state, &handle) {
                     eprintln!("timer reconciliation failed: {error}");
                 }
                 state.flush_notifications(now_ms(), false);
@@ -933,5 +992,87 @@ mod live_gnome {
         if let Err(panic) = outcome {
             std::panic::resume_unwind(panic);
         }
+    }
+}
+
+/// Measures what one state change costs at the store's retention caps, so
+/// "faster" has a number attached. `#[ignore]`d: it prints, it does not assert.
+/// Run with `cargo test --release -- --ignored --nocapture snapshot_cost`.
+///
+/// The window used to fetch this every second while the timer ran. It now
+/// fetches it once on load and receives it once per change, and counts the
+/// timer down locally in between.
+#[cfg(test)]
+mod snapshot_cost {
+    use super::*;
+    use std::time::Instant;
+
+    #[test]
+    #[ignore = "prints a measurement rather than asserting"]
+    fn full_store_snapshot_per_state_change() {
+        let mut data = AppData::default();
+        data.settings.notification_filter.enabled = true;
+        // A realistic-heavy store: a year of six sessions a day, a full inbox
+        // with long bodies, a busy task list.
+        for index in 0..40 {
+            data.create_task(format!("Task number {index} with a normal title"), 2, index);
+        }
+        for index in 0..2_000_i64 {
+            data.sessions.push(domain::SessionRecord {
+                id: format!("session-{index}"),
+                phase: Phase::Focus,
+                task_id: Some("task-0".to_string()),
+                task_title: Some("Task number 0 with a normal title".to_string()),
+                duration_seconds: 1_500,
+                started_at: index * 1_800_000,
+                ended_at: index * 1_800_000 + 1_500_000,
+                outcome: domain::SessionOutcome::Completed,
+            });
+        }
+        for index in 0..domain::NOTIFICATION_RETENTION as i64 {
+            data.capture_notify(
+                "Thunderbird",
+                "x".repeat(200),
+                "y".repeat(2_000),
+                1,
+                0,
+                index,
+            );
+        }
+
+        // "Now" is after the newest session, as it would be in use, so the
+        // snapshot's session window is measured honestly.
+        let now = data.sessions.last().map_or(0, |session| session.ended_at) + 60_000;
+
+        let iterations: u32 = 200;
+        let start = Instant::now();
+        let mut bytes = 0;
+        for _ in 0..iterations {
+            let snapshot = data.snapshot(now);
+            bytes = serde_json::to_vec(&snapshot).unwrap().len();
+        }
+        let per_change = start.elapsed() / iterations;
+        let everything = {
+            let mut whole = data.clone();
+            whole.timer.normalize_remaining(now);
+            serde_json::to_vec(&whole).unwrap().len()
+        };
+
+        let start = Instant::now();
+        for _ in 0..20 {
+            serde_json::to_vec(&data).unwrap();
+        }
+        let per_save = start.elapsed() / 20;
+
+        println!(
+            "snapshot per state change: {per_change:?}, {bytes} bytes on the wire \
+             (the whole store would be {everything} bytes; sessions are windowed)"
+        );
+        println!("compact JSON for save: {per_save:?} (before fsync)");
+        println!(
+            "steady-state IPC while the timer runs: 0 bytes/min \
+             (was {} bytes/min when the window polled every second)",
+            everything as u64 * 60
+        );
     }
 }

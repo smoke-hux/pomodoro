@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { AlertTriangle, X } from "lucide-react";
 import type {
   CaptureStatus,
@@ -195,7 +195,7 @@ function describeCapture(
   return null;
 }
 
-export function SettingsDialog({
+function SettingsDialogComponent({
   open,
   settings,
   captureStatus,
@@ -590,3 +590,11 @@ export function SettingsDialog({
     </div>
   );
 }
+
+/**
+ * Memoised: the window re-renders every second while the timer runs, and this
+ * component has nothing to do with the countdown. Its props are stable
+ * callbacks and slices of the snapshot, so it only re-renders when something
+ * it shows actually changed.
+ */
+export const SettingsDialog = memo(SettingsDialogComponent);

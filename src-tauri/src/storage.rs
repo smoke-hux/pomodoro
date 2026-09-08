@@ -71,7 +71,9 @@ impl Store {
         restrict(parent, DIRECTORY_MODE);
 
         let temporary = self.path.with_extension("json.tmp");
-        let bytes = serde_json::to_vec_pretty(data)
+        // Compact rather than pretty-printed: the file is read by this app,
+        // not by people, and indentation roughly doubled every write.
+        let bytes = serde_json::to_vec(data)
             .map_err(|error| format!("could not serialize local data: {error}"))?;
         let mut file = fs::File::create(&temporary)
             .map_err(|error| format!("could not create {}: {error}", temporary.display()))?;

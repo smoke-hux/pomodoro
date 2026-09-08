@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { ChevronDown } from "lucide-react";
 import type { FocusTask, Interruption, SessionRecord } from "../types";
 
@@ -21,7 +22,7 @@ function minutes(seconds: number) {
   return Math.max(1, Math.round(seconds / 60));
 }
 
-export function DayLedger({ sessions, tasks, interruptions }: DayLedgerProps) {
+function DayLedgerComponent({ sessions, tasks, interruptions }: DayLedgerProps) {
   const today = sessions
     .filter((session) => isToday(session.startedAt))
     .sort((a, b) => b.startedAt - a.startedAt);
@@ -90,3 +91,11 @@ export function DayLedger({ sessions, tasks, interruptions }: DayLedgerProps) {
     </section>
   );
 }
+
+/**
+ * Memoised: the window re-renders every second while the timer runs, and this
+ * component has nothing to do with the countdown. Its props are stable
+ * callbacks and slices of the snapshot, so it only re-renders when something
+ * it shows actually changed.
+ */
+export const DayLedger = memo(DayLedgerComponent);

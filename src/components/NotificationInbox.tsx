@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -182,7 +182,7 @@ function NotificationRow({
   );
 }
 
-export function NotificationInbox({
+function NotificationInboxComponent({
   notifications,
   captureEnabled,
   captureStatus,
@@ -312,3 +312,11 @@ export function NotificationInbox({
     </section>
   );
 }
+
+/**
+ * Memoised: the window re-renders every second while the timer runs, and this
+ * component has nothing to do with the countdown. Its props are stable
+ * callbacks and slices of the snapshot, so it only re-renders when something
+ * it shows actually changed.
+ */
+export const NotificationInbox = memo(NotificationInboxComponent);

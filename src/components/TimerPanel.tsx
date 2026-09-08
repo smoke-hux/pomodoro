@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { Pause, Play, RotateCcw, SkipForward } from "lucide-react";
 import type { FocusTask, Phase, TimerFace as TimerFaceId, TimerState } from "../types";
 import { TimerFace } from "./TimerFace";
@@ -21,7 +21,7 @@ interface TimerPanelProps {
   onAddTask: () => void;
 }
 
-export function TimerPanel({
+function TimerPanelComponent({
   timer,
   activeTask,
   roundsBeforeLongBreak,
@@ -198,3 +198,11 @@ export function TimerPanel({
     </section>
   );
 }
+
+/**
+ * Memoised: the window re-renders every second while the timer runs, and this
+ * component has nothing to do with the countdown. Its props are stable
+ * callbacks and slices of the snapshot, so it only re-renders when something
+ * it shows actually changed.
+ */
+export const TimerPanel = memo(TimerPanelComponent);

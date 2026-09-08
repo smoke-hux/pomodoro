@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Clock3, Inbox, Menu, Settings as SettingsIcon } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./lib/api";
+import { useCountdown } from "./lib/useCountdown";
 import { defaultSnapshot } from "./types";
 import type { AppSnapshot, Phase, Settings } from "./types";
 import { TaskSidebar } from "./components/TaskSidebar";
@@ -154,22 +155,35 @@ export default function App() {
   const [notice, setNotice] = useState("");
   const [ready, setReady] = useState(!inTauri);
   const noticeTimer = useRef<number | null>(null);
-  const snapshotVersion = useRef(0);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const knownSessionIds = useRef(new Set<string>());
   const hasSessionBaseline = useRef(!inTauri);
 
-  const activeTask =
-    snapshot.tasks.find((task) => task.id === snapshot.timer.activeTaskId) ?? null;
-  const todayFocus = snapshot.sessions.filter((session) => {
-    const date = new Date(session.startedAt);
-    const now = new Date();
-    return (
-      session.phase === "focus" &&
-      session.outcome === "completed" &&
-      date.toDateString() === now.toDateString()
-    );
-  });
+  // The countdown lives here, not in the snapshot. The backend sends a
+  // deadline and this window counts down to it locally; the snapshot only
+  // changes when something other than the clock does.
+  const remainingSeconds = useCountdown(snapshot.timer);
+  const timer = useMemo(
+    () => ({ ...snapshot.timer, remainingSeconds }),
+    [snapshot.timer, remainingSeconds],
+  );
+
+  const activeTask = useMemo(
+    () => snapshot.tasks.find((task) => task.id === snapshot.timer.activeTaskId) ?? null,
+    [snapshot.tasks, snapshot.timer.activeTaskId],
+  );
+  const todaySummary = useMemo(() => {
+    const today = new Date().toDateString();
+    let count = 0;
+    let seconds = 0;
+    for (const session of snapshot.sessions) {
+      if (session.phase !== "focus" || session.outcome !== "completed") continue;
+      if (new Date(session.startedAt).toDateString() !== today) continue;
+      count += 1;
+      seconds += session.durationSeconds;
+    }
+    return { count, minutes: Math.round(seconds / 60) };
+  }, [snapshot.sessions]);
 
   // Dialogs are modal, so remember what had focus and hand it back on close.
   // Without this, dismissing a capture with Escape drops focus to <body> and
@@ -195,53 +209,38 @@ export default function App() {
     noticeTimer.current = window.setTimeout(() => setNotice(""), 3_000);
   }, []);
 
-  const acceptSnapshot = useCallback(
-    (next: AppSnapshot, expectedVersion?: number) => {
-      if (
-        expectedVersion !== undefined &&
-        expectedVersion !== snapshotVersion.current
-      ) {
-        return false;
-      }
-      snapshotVersion.current += 1;
-      setSnapshot(next);
-      return true;
-    },
-    [],
-  );
-
+  // A command resolves once the backend has applied and saved it. The new state
+  // arrives on "state-changed" — the single channel for every change, whether
+  // it came from this window, the tray, or the clock — so there is nothing to
+  // reconcile between a returned value and a broadcast one.
   const run = useCallback(
-    async (action: () => Promise<AppSnapshot>, successMessage?: string) => {
+    async (action: () => Promise<void>, successMessage?: string) => {
       if (!inTauri) {
         showNotice("Desktop controls are active in the packaged Ubuntu app.");
         return;
       }
-      const requestVersion = ++snapshotVersion.current;
       try {
-        const next = await action();
-        acceptSnapshot(next, requestVersion);
+        await action();
         if (successMessage) showNotice(successMessage);
       } catch (error) {
         showNotice(typeof error === "string" ? error : "That action could not be completed.");
       }
     },
-    [acceptSnapshot, inTauri, showNotice],
+    [inTauri, showNotice],
   );
 
   useEffect(() => {
     if (!inTauri) return;
     let cancelled = false;
-    const requestVersion = snapshotVersion.current;
     void api
       .snapshot()
       .then((next) => {
         if (cancelled) return;
-        if (acceptSnapshot(next, requestVersion)) {
-          for (const session of next.sessions) {
-            knownSessionIds.current.add(session.id);
-          }
-          hasSessionBaseline.current = true;
+        for (const session of next.sessions) {
+          knownSessionIds.current.add(session.id);
         }
+        hasSessionBaseline.current = true;
+        setSnapshot(next);
         setReady(true);
       })
       .catch(() => {
@@ -264,44 +263,14 @@ export default function App() {
       if (hasNewCompletion && event.payload.settings.sound) {
         void playCompletionChime();
       }
-      acceptSnapshot(event.payload);
+      setSnapshot(event.payload);
     });
 
     return () => {
       cancelled = true;
       void unlisten.then((stop) => stop());
     };
-  }, [acceptSnapshot, inTauri, showNotice]);
-
-  // The countdown only advances while the timer is running, so that is the only
-  // time the display needs repainting. Idle and paused states change solely
-  // through user actions, which already arrive on the "state-changed" event —
-  // polling through them was two IPC round trips per second, all day, for a
-  // number that was not moving. The timer is displayed at whole-second
-  // precision, so polling faster than once per second only rerenders unrelated
-  // task, inbox, and ledger trees without producing a new visible value.
-  const timerStatus = snapshot.timer.status;
-  useEffect(() => {
-    if (!inTauri || timerStatus !== "running") return;
-    let cancelled = false;
-    let timeout: number | null = null;
-    const poll = async () => {
-      const requestVersion = snapshotVersion.current;
-      try {
-        const next = await api.snapshot();
-        if (!cancelled) acceptSnapshot(next, requestVersion);
-      } catch {
-        // A later state event or poll can recover from a transient IPC miss.
-      } finally {
-        if (!cancelled) timeout = window.setTimeout(poll, 1_000);
-      }
-    };
-    timeout = window.setTimeout(poll, 1_000);
-    return () => {
-      cancelled = true;
-      if (timeout !== null) window.clearTimeout(timeout);
-    };
-  }, [acceptSnapshot, inTauri, timerStatus]);
+  }, [inTauri, showNotice]);
 
   useEffect(
     () => () => {
@@ -312,25 +281,112 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = snapshot.settings.theme;
-    const status = snapshot.timer.status === "running" ? "running" : snapshot.timer.status;
-    document.title = `${Math.ceil(snapshot.timer.remainingSeconds / 60)}m · ${snapshot.timer.phase === "focus" ? "Focus" : "Break"} · ${status} — Pomodoro`;
-  }, [snapshot.settings.theme, snapshot.timer]);
+  }, [snapshot.settings.theme]);
+
+  const minutesLeft = Math.ceil(remainingSeconds / 60);
+  useEffect(() => {
+    document.title = `${minutesLeft}m · ${timer.phase === "focus" ? "Focus" : "Break"} · ${timer.status} — Pomodoro`;
+  }, [minutesLeft, timer.phase, timer.status]);
 
   const openAddTask = useCallback(() => {
     setSidebarOpen(true);
     setAddRequest((count) => count + 1);
   }, []);
+  const openCapture = useCallback(() => openDialog(setCaptureOpen), [openDialog]);
+  const openSettings = useCallback(() => openDialog(setSettingsOpen), [openDialog]);
+  const closeCapture = useCallback(() => closeDialog(setCaptureOpen), [closeDialog]);
+  const closeSettings = useCallback(() => closeDialog(setSettingsOpen), [closeDialog]);
 
   const selectPhase = useCallback(
     (phase: Phase) => void run(() => api.setPhase(phase)),
     [run],
   );
 
+  // Every handler below is stable across renders, which is what lets the
+  // memoised sidebar, ledger and dialogs sit out the once-a-second countdown.
+  const toggleTimer = useCallback(() => void run(api.toggleTimer), [run]);
+  const resetTimer = useCallback(() => void run(api.resetTimer, "Interval reset."), [run]);
+  const timerPhase = timer.phase;
+  const skipPhase = useCallback(
+    () =>
+      void run(
+        api.skipPhase,
+        timerPhase === "focus" ? "Focus ended without credit." : "Break skipped.",
+      ),
+    [run, timerPhase],
+  );
+  const selectTask = useCallback(
+    (id: string) => {
+      void run(() => api.selectTask(id));
+      setSidebarOpen(false);
+    },
+    [run],
+  );
+  const addTask = useCallback(
+    async (title: string, estimate: number) => {
+      await run(() => api.addTask(title, estimate), "Task added.");
+    },
+    [run],
+  );
+  const toggleTask = useCallback((id: string) => void run(() => api.toggleTask(id)), [run]);
+  const deleteTask = useCallback(
+    (id: string) => void run(() => api.deleteTask(id), "Task deleted."),
+    [run],
+  );
+  const handleInterruption = useCallback(
+    (id: string, handled: boolean) =>
+      void run(() => api.setInterruptionHandled(id, handled), "Marked handled."),
+    [run],
+  );
+  const convertInterruption = useCallback(
+    (id: string) => void run(() => api.convertInterruption(id), "Added to today’s tasks."),
+    [run],
+  );
+  const deleteInterruption = useCallback(
+    (id: string) => void run(() => api.deleteInterruption(id), "Interruption deleted."),
+    [run],
+  );
+  const triageNotification = useCallback(
+    (id: string, triaged: boolean) =>
+      void run(
+        () => api.triageNotification(id, triaged),
+        triaged ? "Marked triaged." : "Moved back to pending.",
+      ),
+    [run],
+  );
+  const convertNotification = useCallback(
+    (id: string) => void run(() => api.convertNotification(id), "Added to today’s tasks."),
+    [run],
+  );
+  const deleteNotification = useCallback(
+    (id: string) => void run(() => api.deleteNotification(id), "Notification deleted."),
+    [run],
+  );
+  const saveInterruption = useCallback(
+    async (text: string, category: "internal" | "external") => {
+      await run(() => api.captureInterruption(text, category), "Saved. Return to your focus.");
+    },
+    [run],
+  );
+  const saveSettings = useCallback(
+    async (settings: Settings) => {
+      await run(() => api.updateSettings(settings), "Settings saved.");
+    },
+    [run],
+  );
+  const clearHistory = useCallback(async () => {
+    await run(api.clearHistory, "Session history cleared.");
+  }, [run]);
+  const clearNotifications = useCallback(async () => {
+    await run(api.clearNotifications, "Captured notifications cleared.");
+  }, [run]);
+  const closeSidebar = useCallback(() => setSidebarOpen(false), []);
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        if (captureOpen) closeDialog(setCaptureOpen);
-        else if (settingsOpen) closeDialog(setSettingsOpen);
+        if (captureOpen) closeCapture();
+        else if (settingsOpen) closeSettings();
         else setSidebarOpen(false);
         return;
       }
@@ -343,16 +399,16 @@ export default function App() {
         // The focused control gets its own key back.
         if (activatesOnSpace(event.target)) return;
         event.preventDefault();
-        void run(api.toggleTimer);
+        toggleTimer();
       } else if (event.ctrlKey && event.key.toLowerCase() === "i") {
         event.preventDefault();
-        openDialog(setCaptureOpen);
+        openCapture();
       } else if (event.ctrlKey && event.key.toLowerCase() === "n") {
         event.preventDefault();
         openAddTask();
       } else if (event.ctrlKey && event.key === ",") {
         event.preventDefault();
-        openDialog(setSettingsOpen);
+        openSettings();
       } else if (event.ctrlKey && ["1", "2", "3"].includes(event.key)) {
         event.preventDefault();
         const phases: Phase[] = ["focus", "shortBreak", "longBreak"];
@@ -361,12 +417,20 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [captureOpen, closeDialog, openAddTask, openDialog, run, selectPhase, settingsOpen]);
+  }, [
+    captureOpen,
+    closeCapture,
+    closeSettings,
+    openAddTask,
+    openCapture,
+    openSettings,
+    selectPhase,
+    settingsOpen,
+    toggleTimer,
+  ]);
 
-  const themeClass = useMemo(
-    () => `app-shell status-${snapshot.timer.status} phase-${snapshot.timer.phase}`,
-    [snapshot.timer.phase, snapshot.timer.status],
-  );
+  const themeClass = `app-shell status-${timer.status} phase-${timer.phase}`;
+  const selectionLocked = timer.phase === "focus" && timer.status !== "idle";
 
   if (!ready) {
     return (
@@ -394,14 +458,12 @@ export default function App() {
         </div>
         <span className="app-name">Pomodoro</span>
         <span className="toolbar-summary">
-          {todayFocus.length} focus · {Math.round(
-            todayFocus.reduce((total, item) => total + item.durationSeconds, 0) / 60,
-          )}m today
+          {todaySummary.count} focus · {todaySummary.minutes}m today
         </span>
         <button
           className="icon-button"
           type="button"
-          onClick={() => openDialog(setCaptureOpen)}
+          onClick={openCapture}
           aria-label="Capture an interruption"
           title="Capture interruption (Ctrl+I)"
         >
@@ -410,7 +472,7 @@ export default function App() {
         <button
           className="icon-button"
           type="button"
-          onClick={() => openDialog(setSettingsOpen)}
+          onClick={openSettings}
           aria-label="Open settings"
           title="Settings (Ctrl+,)"
         >
@@ -428,41 +490,19 @@ export default function App() {
             captureStatus={snapshot.captureStatus}
             activeTaskId={snapshot.timer.activeTaskId}
             addRequest={addRequest}
-            selectionLocked={
-              snapshot.timer.phase === "focus" && snapshot.timer.status !== "idle"
-            }
-            onSelectTask={(id) => {
-              void run(() => api.selectTask(id));
-              setSidebarOpen(false);
-            }}
-            onAddTask={async (title, estimate) => {
-              await run(() => api.addTask(title, estimate), "Task added.");
-            }}
-            onToggleTask={(id) => void run(() => api.toggleTask(id))}
-            onDeleteTask={(id) => void run(() => api.deleteTask(id), "Task deleted.")}
-            onOpenCapture={() => openDialog(setCaptureOpen)}
-            onHandleInterruption={(id, handled) =>
-              void run(() => api.setInterruptionHandled(id, handled), "Marked handled.")
-            }
-            onConvertInterruption={(id) =>
-              void run(() => api.convertInterruption(id), "Added to today’s tasks.")
-            }
-            onDeleteInterruption={(id) =>
-              void run(() => api.deleteInterruption(id), "Interruption deleted.")
-            }
-            onTriageNotification={(id, triaged) =>
-              void run(
-                () => api.triageNotification(id, triaged),
-                triaged ? "Marked triaged." : "Moved back to pending.",
-              )
-            }
-            onConvertNotification={(id) =>
-              void run(() => api.convertNotification(id), "Added to today’s tasks.")
-            }
-            onDeleteNotification={(id) =>
-              void run(() => api.deleteNotification(id), "Notification deleted.")
-            }
-            onOpenSettings={() => openDialog(setSettingsOpen)}
+            selectionLocked={selectionLocked}
+            onSelectTask={selectTask}
+            onAddTask={addTask}
+            onToggleTask={toggleTask}
+            onDeleteTask={deleteTask}
+            onOpenCapture={openCapture}
+            onHandleInterruption={handleInterruption}
+            onConvertInterruption={convertInterruption}
+            onDeleteInterruption={deleteInterruption}
+            onTriageNotification={triageNotification}
+            onConvertNotification={convertNotification}
+            onDeleteNotification={deleteNotification}
+            onOpenSettings={openSettings}
           />
         </div>
         {sidebarOpen && (
@@ -470,26 +510,19 @@ export default function App() {
             className="sidebar-scrim"
             type="button"
             aria-label="Close tasks"
-            onClick={() => setSidebarOpen(false)}
+            onClick={closeSidebar}
           />
         )}
         <div className="focus-column">
           <TimerPanel
-            timer={snapshot.timer}
+            timer={timer}
             activeTask={activeTask}
             roundsBeforeLongBreak={snapshot.settings.roundsBeforeLongBreak}
             face={snapshot.settings.timerFace}
             onSetPhase={selectPhase}
-            onToggleTimer={() => void run(api.toggleTimer)}
-            onReset={() => void run(api.resetTimer, "Interval reset.")}
-            onSkip={() =>
-              void run(
-                api.skipPhase,
-                snapshot.timer.phase === "focus"
-                  ? "Focus ended without credit."
-                  : "Break skipped.",
-              )
-            }
+            onToggleTimer={toggleTimer}
+            onReset={resetTimer}
+            onSkip={skipPhase}
             onAddTask={openAddTask}
           />
           <DayLedger
@@ -500,31 +533,16 @@ export default function App() {
         </div>
       </div>
 
-      <InterruptionDialog
-        open={captureOpen}
-        onClose={() => closeDialog(setCaptureOpen)}
-        onSave={async (text, category) => {
-          await run(
-            () => api.captureInterruption(text, category),
-            "Saved. Return to your focus.",
-          );
-        }}
-      />
+      <InterruptionDialog open={captureOpen} onClose={closeCapture} onSave={saveInterruption} />
       <SettingsDialog
         open={settingsOpen}
         settings={snapshot.settings}
         captureStatus={snapshot.captureStatus}
         notificationCount={snapshot.notifications.length}
-        onClose={() => closeDialog(setSettingsOpen)}
-        onSave={async (settings: Settings) => {
-          await run(() => api.updateSettings(settings), "Settings saved.");
-        }}
-        onClearHistory={async () => {
-          await run(api.clearHistory, "Session history cleared.");
-        }}
-        onClearNotifications={async () => {
-          await run(api.clearNotifications, "Captured notifications cleared.");
-        }}
+        onClose={closeSettings}
+        onSave={saveSettings}
+        onClearHistory={clearHistory}
+        onClearNotifications={clearNotifications}
       />
       <div className="live-notice" aria-live="polite" aria-atomic="true">
         {notice}
