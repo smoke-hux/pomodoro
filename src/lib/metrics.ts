@@ -226,3 +226,21 @@ export function formatClock(timestamp: number): string {
   const date = asValidDate(timestamp);
   return `${padTwo(date.getHours())}:${padTwo(date.getMinutes())}`;
 }
+
+// Coarse on purpose. A captured notification is triaged after the interval, so
+// the useful question is "roughly when", not "how many seconds ago".
+export function formatRelativeTime(timestamp: number, now: number): string {
+  const elapsed = now - timestamp;
+
+  if (!Number.isFinite(elapsed) || elapsed < 60_000) {
+    return "just now";
+  }
+  if (elapsed < 3_600_000) {
+    return `${Math.floor(elapsed / 60_000)}m ago`;
+  }
+  if (elapsed < 86_400_000) {
+    return `${Math.floor(elapsed / 3_600_000)}h ago`;
+  }
+
+  return `${Math.floor(elapsed / 86_400_000)}d ago`;
+}

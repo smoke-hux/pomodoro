@@ -1,17 +1,28 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AppSnapshot, Phase, Settings } from "../types";
+import type {
+  AppSnapshot,
+  Phase,
+  Settings,
+} from "../types";
 
 type CommandArgs = Record<string, unknown>;
 
-export async function command(
-  name: string,
-  args: CommandArgs = {},
-): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>(name, args);
+/**
+ * Runs a command that changes state.
+ *
+ * It resolves when the backend has applied and saved the change; the new
+ * state arrives on the `state-changed` event, which the backend emits once per
+ * change. Commands used to return the whole snapshot as well, so every click
+ * serialised the entire store twice and the window had to guess which of the
+ * two copies was newer.
+ */
+export async function command(name: string, args: CommandArgs = {}): Promise<void> {
+  await invoke<void>(name, args);
 }
 
 export const api = {
-  snapshot: () => command("get_snapshot"),
+  /** The one read. Asked once on load; everything after comes as events. */
+  snapshot: () => invoke<AppSnapshot>("get_snapshot"),
   toggleTimer: () => command("toggle_timer"),
   resetTimer: () => command("reset_timer"),
   skipPhase: () => command("skip_phase"),
@@ -36,4 +47,11 @@ export const api = {
   updateSettings: (settings: Settings) =>
     command("update_settings", { settings }),
   clearHistory: () => command("clear_history"),
+  triageNotification: (id: string, triaged: boolean) =>
+    command("triage_notification", { id, triaged }),
+  convertNotification: (id: string) =>
+    command("convert_notification", { id }),
+  deleteNotification: (id: string) =>
+    command("delete_notification", { id }),
+  clearNotifications: () => command("clear_notifications"),
 };

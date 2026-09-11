@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 
 interface InterruptionDialogProps {
   open: boolean;
@@ -6,7 +6,7 @@ interface InterruptionDialogProps {
   onSave: (text: string, category: "internal" | "external") => Promise<void>;
 }
 
-export function InterruptionDialog({ open, onClose, onSave }: InterruptionDialogProps) {
+function InterruptionDialogComponent({ open, onClose, onSave }: InterruptionDialogProps) {
   const [text, setText] = useState("");
   const [category, setCategory] = useState<"internal" | "external">("internal");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -85,3 +85,11 @@ export function InterruptionDialog({ open, onClose, onSave }: InterruptionDialog
     </div>
   );
 }
+
+/**
+ * Memoised: the window re-renders every second while the timer runs, and this
+ * component has nothing to do with the countdown. Its props are stable
+ * callbacks and slices of the snapshot, so it only re-renders when something
+ * it shows actually changed.
+ */
+export const InterruptionDialog = memo(InterruptionDialogComponent);
