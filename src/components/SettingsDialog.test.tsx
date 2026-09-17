@@ -29,7 +29,7 @@ function renderDialog(overrides: Partial<Parameters<typeof SettingsDialog>[0]> =
 }
 
 describe("unsaved edits", () => {
-  it("survives the state broadcast that arrives twice a second", () => {
+  it("survives a state broadcast arriving mid-edit", () => {
     // The backend re-emits the whole snapshot while the timer runs, so
     // `settings` is a new object on every tick even when nothing in it changed.
     const { props, rerender } = renderDialog();

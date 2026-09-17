@@ -209,8 +209,8 @@ function SettingsDialogComponent({
   const [confirmClear, setConfirmClear] = useState(false);
   const [confirmClearNotifications, setConfirmClearNotifications] = useState(false);
 
-  // The backend broadcasts a fresh snapshot twice a second while the timer runs,
-  // and every one of them is a new `settings` object. Seeding the draft from
+  // Every snapshot the backend broadcasts — a phase ending, a notification
+  // being filed — carries a new `settings` object. Seeding the draft from
   // that object on each change wiped whatever the user was in the middle of
   // typing. The draft is seeded once, when the dialog opens, and belongs to the
   // user until they save or cancel.

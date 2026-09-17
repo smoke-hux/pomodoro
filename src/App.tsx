@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Clock3, Inbox, Menu, Settings as SettingsIcon } from "lucide-react";
+import { Clock3, Inbox, Menu, Monitor, Moon, Settings as SettingsIcon, Sun } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./lib/api";
+import { getCompletedFocusCount, getCompletedFocusMinutes, getLocalDateKey } from "./lib/metrics";
+import { applyTheme, nextTheme, resolveTheme, useSystemDark } from "./lib/theme";
 import { useCountdown } from "./lib/useCountdown";
+import { useDayKey } from "./lib/useDayKey";
+import { closeRowMenus, useRowMenus } from "./lib/useRowMenus";
 import { defaultSnapshot } from "./types";
-import type { AppSnapshot, Phase, Settings } from "./types";
+import type { AppSnapshot, Phase, Settings, ThemePreference } from "./types";
 import { TaskSidebar } from "./components/TaskSidebar";
 import { TimerPanel } from "./components/TimerPanel";
 import { DayLedger } from "./components/DayLedger";
@@ -109,6 +113,13 @@ function browserPreview(): AppSnapshot {
   };
 }
 
+const themeLabels: Record<ThemePreference, string> = {
+  system: "System",
+  light: "Light",
+  dark: "Dark",
+};
+const themeIcons = { system: Monitor, light: Sun, dark: Moon };
+
 async function playCompletionChime() {
   const AudioContextClass = window.AudioContext;
   if (!AudioContextClass) return;
@@ -154,6 +165,8 @@ export default function App() {
   const [addRequest, setAddRequest] = useState(0);
   const [notice, setNotice] = useState("");
   const [ready, setReady] = useState(!inTauri);
+  // Whether `snapshot` holds real settings yet, rather than the defaults.
+  const [settingsLoaded, setSettingsLoaded] = useState(!inTauri);
   const noticeTimer = useRef<number | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const knownSessionIds = useRef(new Set<string>());
@@ -172,23 +185,26 @@ export default function App() {
     () => snapshot.tasks.find((task) => task.id === snapshot.timer.activeTaskId) ?? null,
     [snapshot.tasks, snapshot.timer.activeTaskId],
   );
+  // Changes at midnight, so "today" rolls over in a window left open overnight.
+  const dayKey = useDayKey();
   const todaySummary = useMemo(() => {
-    const today = new Date().toDateString();
-    let count = 0;
-    let seconds = 0;
-    for (const session of snapshot.sessions) {
-      if (session.phase !== "focus" || session.outcome !== "completed") continue;
-      if (new Date(session.startedAt).toDateString() !== today) continue;
-      count += 1;
-      seconds += session.durationSeconds;
-    }
-    return { count, minutes: Math.round(seconds / 60) };
-  }, [snapshot.sessions]);
+    const today = snapshot.sessions.filter(
+      (session) => getLocalDateKey(session.startedAt) === dayKey,
+    );
+    return {
+      count: getCompletedFocusCount(today),
+      minutes: Math.round(getCompletedFocusMinutes(today)),
+    };
+  }, [snapshot.sessions, dayKey]);
 
   // Dialogs are modal, so remember what had focus and hand it back on close.
   // Without this, dismissing a capture with Escape drops focus to <body> and
   // the next Tab restarts from the top of the toolbar.
   const openDialog = useCallback((open: (value: boolean) => void) => {
+    // A menu opened from the keyboard is still open when a shortcut opens a
+    // dialog — no pointer press has happened to close it — and would sit
+    // behind the modal, out of Escape's reach, still acting on its row.
+    closeRowMenus();
     returnFocusRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     open(true);
@@ -214,16 +230,18 @@ export default function App() {
   // it came from this window, the tray, or the clock — so there is nothing to
   // reconcile between a returned value and a broadcast one.
   const run = useCallback(
-    async (action: () => Promise<void>, successMessage?: string) => {
+    async (action: () => Promise<void>, successMessage?: string): Promise<boolean> => {
       if (!inTauri) {
         showNotice("Desktop controls are active in the packaged Ubuntu app.");
-        return;
+        return false;
       }
       try {
         await action();
         if (successMessage) showNotice(successMessage);
+        return true;
       } catch (error) {
         showNotice(typeof error === "string" ? error : "That action could not be completed.");
+        return false;
       }
     },
     [inTauri, showNotice],
@@ -241,6 +259,7 @@ export default function App() {
         }
         hasSessionBaseline.current = true;
         setSnapshot(next);
+        setSettingsLoaded(true);
         setReady(true);
       })
       .catch(() => {
@@ -253,10 +272,16 @@ export default function App() {
     const unlisten = listen<AppSnapshot>("state-changed", (event) => {
       if (cancelled) return;
       let hasNewCompletion = false;
+      // If the initial read failed, the first broadcast is the baseline: every
+      // session in it is history, not something that just completed. Without
+      // this the baseline was never set on that path and the chime stayed
+      // silent for the life of the window.
+      const isBaseline = !hasSessionBaseline.current;
+      hasSessionBaseline.current = true;
       for (const session of event.payload.sessions) {
         if (knownSessionIds.current.has(session.id)) continue;
         knownSessionIds.current.add(session.id);
-        if (hasSessionBaseline.current && session.outcome === "completed") {
+        if (!isBaseline && session.outcome === "completed") {
           hasNewCompletion = true;
         }
       }
@@ -264,6 +289,7 @@ export default function App() {
         void playCompletionChime();
       }
       setSnapshot(event.payload);
+      setSettingsLoaded(true);
     });
 
     return () => {
@@ -279,9 +305,15 @@ export default function App() {
     [],
   );
 
+  // Not before the stored settings have arrived — and not at all if they never
+  // do: until then the snapshot holds the default, and applying that would
+  // repaint a Dark user's window as System and overwrite the remembered choice
+  // that public/theme-init.js painted the first frame with.
+  const systemDark = useSystemDark();
+  const theme = snapshot.settings.theme;
   useEffect(() => {
-    document.documentElement.dataset.theme = snapshot.settings.theme;
-  }, [snapshot.settings.theme]);
+    if (settingsLoaded) applyTheme(theme, systemDark);
+  }, [settingsLoaded, theme, systemDark]);
 
   const minutesLeft = Math.ceil(remainingSeconds / 60);
   useEffect(() => {
@@ -293,7 +325,15 @@ export default function App() {
     setAddRequest((count) => count + 1);
   }, []);
   const openCapture = useCallback(() => openDialog(setCaptureOpen), [openDialog]);
-  const openSettings = useCallback(() => openDialog(setSettingsOpen), [openDialog]);
+  // Until the stored settings have arrived the snapshot holds the defaults, and
+  // anything that saves settings would write those defaults over the real ones.
+  const openSettings = useCallback(() => {
+    if (!settingsLoaded) {
+      showNotice("Settings are not available until Pomodoro has read its local data.");
+      return;
+    }
+    openDialog(setSettingsOpen);
+  }, [openDialog, settingsLoaded, showNotice]);
   const closeCapture = useCallback(() => closeDialog(setCaptureOpen), [closeDialog]);
   const closeSettings = useCallback(() => closeDialog(setSettingsOpen), [closeDialog]);
 
@@ -323,9 +363,12 @@ export default function App() {
     [run],
   );
   const addTask = useCallback(
-    async (title: string, estimate: number) => {
-      await run(() => api.addTask(title, estimate), "Task added.");
-    },
+    (title: string, estimate: number) => run(() => api.addTask(title, estimate), "Task added."),
+    [run],
+  );
+  const updateTask = useCallback(
+    (id: string, title: string, estimate: number) =>
+      run(() => api.updateTask(id, title, estimate), "Task updated."),
     [run],
   );
   const toggleTask = useCallback((id: string) => void run(() => api.toggleTask(id)), [run]);
@@ -382,9 +425,56 @@ export default function App() {
   }, [run]);
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
 
+  // The toolbar button steps System → Light → Dark and saves at once. It sends
+  // the settings as last received, never the settings dialog's unsaved draft.
+  //
+  // The saved theme only comes back with the next broadcast, so a second click
+  // inside that gap steps on from the theme already asked for, not from the one
+  // still on screen — otherwise two quick clicks both ask for the same thing.
+  const settings = snapshot.settings;
+  const requestedTheme = useRef<ThemePreference | null>(null);
+  useEffect(() => {
+    // Only the broadcast that carries the requested theme settles it. An
+    // earlier save's broadcast arriving first must not, or a click in the
+    // gap before the later one repeats a request.
+    if (requestedTheme.current === settings.theme) requestedTheme.current = null;
+  }, [settings.theme]);
+  const cycleTheme = useCallback(() => {
+    // The same guard as openSettings: this sends the whole settings object.
+    if (!settingsLoaded) return;
+    const next = nextTheme(requestedTheme.current ?? settings.theme);
+    if (!inTauri) {
+      // The browser preview has no backend to save to; the theme is the one
+      // setting worth previewing anyway.
+      setSnapshot((current) => ({ ...current, settings: { ...current.settings, theme: next } }));
+      return;
+    }
+    requestedTheme.current = next;
+    void run(
+      () => api.updateSettings({ ...settings, theme: next }),
+      `Theme: ${themeLabels[next]}.`,
+    ).then(() => {
+      // Saved or refused, this request is over — unless a later click has
+      // replaced it. The effect above cannot be the only thing that settles
+      // it: three quick clicks end on the theme they started from, the
+      // broadcasts can land in one render, and nothing is seen to change.
+      if (requestedTheme.current === next) requestedTheme.current = null;
+    });
+  }, [inTauri, run, settings, settingsLoaded]);
+
+  useRowMenus();
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        // An open row menu is the innermost thing on screen, so it goes first
+        // and focus returns to the button that opened it.
+        const menu = document.querySelector<HTMLDetailsElement>("details.row-menu[open]");
+        if (menu && !captureOpen && !settingsOpen) {
+          menu.open = false;
+          menu.querySelector("summary")?.focus();
+          return;
+        }
         if (captureOpen) closeCapture();
         else if (settingsOpen) closeSettings();
         else setSidebarOpen(false);
@@ -429,7 +519,12 @@ export default function App() {
     toggleTimer,
   ]);
 
-  const themeClass = `app-shell status-${timer.status} phase-${timer.phase}`;
+  const shellClass = `app-shell status-${timer.status} phase-${timer.phase}`;
+  const ThemeIcon = themeIcons[theme];
+  const themeTitle =
+    theme === "system"
+      ? `Theme: System (${resolveTheme(theme, systemDark)} right now)`
+      : `Theme: ${themeLabels[theme]}`;
   const selectionLocked = timer.phase === "focus" && timer.status !== "idle";
 
   if (!ready) {
@@ -442,7 +537,7 @@ export default function App() {
   }
 
   return (
-    <main className={themeClass}>
+    <main className={shellClass}>
       <header className="app-toolbar">
         <button
           className="icon-button mobile-only"
@@ -472,6 +567,16 @@ export default function App() {
         <button
           className="icon-button"
           type="button"
+          onClick={cycleTheme}
+          disabled={!settingsLoaded}
+          aria-label={`${themeTitle}. Switch to ${themeLabels[nextTheme(theme)]}`}
+          title={`${themeTitle} — click for ${themeLabels[nextTheme(theme)]}`}
+        >
+          <ThemeIcon aria-hidden="true" size={18} />
+        </button>
+        <button
+          className="icon-button"
+          type="button"
           onClick={openSettings}
           aria-label="Open settings"
           title="Settings (Ctrl+,)"
@@ -492,7 +597,9 @@ export default function App() {
             addRequest={addRequest}
             selectionLocked={selectionLocked}
             onSelectTask={selectTask}
+            dayKey={dayKey}
             onAddTask={addTask}
+            onUpdateTask={updateTask}
             onToggleTask={toggleTask}
             onDeleteTask={deleteTask}
             onOpenCapture={openCapture}
@@ -526,6 +633,7 @@ export default function App() {
             onAddTask={openAddTask}
           />
           <DayLedger
+            dayKey={dayKey}
             sessions={snapshot.sessions}
             tasks={snapshot.tasks}
             interruptions={snapshot.interruptions}

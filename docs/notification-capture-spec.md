@@ -264,5 +264,4 @@ Follow `docs/brand-guidelines.md`. Specifically:
   yields to buttons, links, form fields, `<summary>`, and anything carrying an
   interactive ARIA role.
 - Settings edits belong to the user until they save. The dialog seeds its draft
-  once, on open, and never from the state broadcast that arrives twice a second
-  while the timer runs.
+  once, on open, and never from a state broadcast that arrives while it is open.
