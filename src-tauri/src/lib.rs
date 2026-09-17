@@ -814,11 +814,20 @@ mod tray {
     #[test]
     fn the_tray_item_names_what_a_click_will_do() {
         assert_eq!(toggle_label(TimerStatus::Running, Phase::Focus), "Pause");
-        assert_eq!(toggle_label(TimerStatus::Running, Phase::ShortBreak), "Pause");
+        assert_eq!(
+            toggle_label(TimerStatus::Running, Phase::ShortBreak),
+            "Pause"
+        );
         assert_eq!(toggle_label(TimerStatus::Paused, Phase::Focus), "Resume");
         assert_eq!(toggle_label(TimerStatus::Idle, Phase::Focus), "Start focus");
-        assert_eq!(toggle_label(TimerStatus::Idle, Phase::ShortBreak), "Start break");
-        assert_eq!(toggle_label(TimerStatus::Idle, Phase::LongBreak), "Start break");
+        assert_eq!(
+            toggle_label(TimerStatus::Idle, Phase::ShortBreak),
+            "Start break"
+        );
+        assert_eq!(
+            toggle_label(TimerStatus::Idle, Phase::LongBreak),
+            "Start break"
+        );
     }
 }
 
