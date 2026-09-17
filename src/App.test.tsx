@@ -220,6 +220,22 @@ describe("when the saved data could not be read", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("does not send the user to Quit when the old file could not be moved aside", async () => {
+    // Quit saves. The notice used to recommend the one action that would
+    // replace the file it was warning about; the backend now saves nothing on
+    // this path, and the notice says so.
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(
+        command === "get_snapshot" ? { ...defaultSnapshot, recoveredStore: "" } : undefined,
+      ),
+    );
+    render(<App />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("nothing is being saved");
+    expect(alert.textContent).not.toMatch(/quit from the tray/i);
+  });
+
   it("says nothing on a normal launch", async () => {
     invoke.mockImplementation((command: string) =>
       Promise.resolve(command === "get_snapshot" ? defaultSnapshot : undefined),

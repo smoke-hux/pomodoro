@@ -12,7 +12,7 @@ import {
   Undo2,
 } from "lucide-react";
 import type { CaptureStatus, DesktopNotification } from "../types";
-import { formatRelativeTime, toIsoTime as isoTime } from "../lib/metrics";
+import { formatRelativeTime, toIsoTime } from "../lib/metrics";
 
 interface NotificationInboxProps {
   notifications: DesktopNotification[];
@@ -45,7 +45,6 @@ function absoluteTime(timestamp: number): string {
     minute: "2-digit",
   });
 }
-
 
 function NotificationRow({
   item,
@@ -102,7 +101,7 @@ function NotificationRow({
             {word}
           </span>
           {item.duringFocus && <span className="notice-during">During focus</span>}
-          <time dateTime={isoTime(item.receivedAt)} title={absoluteTime(item.receivedAt)}>
+          <time dateTime={toIsoTime(item.receivedAt)} title={absoluteTime(item.receivedAt)}>
             {formatRelativeTime(item.receivedAt, now)}
           </time>
         </p>

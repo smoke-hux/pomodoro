@@ -245,9 +245,12 @@ function TaskSidebarComponent({
   // "Delete task?" appears where the trash button was and takes focus, so the
   // second half of a double click, or Enter held a moment too long, lands on
   // it. It does not act until it has been on screen long enough to be read —
-  // and it looks that way, and says so to a screen reader, so a press that is
-  // ignored is not mistaken for a delete that happened.
+  // and it looks that way, so a press that is ignored is not mistaken for a
+  // delete that happened. A screen reader hears "unavailable" when focus lands
+  // on it, and a change of state on the focused element is not announced
+  // again, so becoming ready is said out loud through a live region.
   const [confirmArmed, setConfirmArmed] = useState(false);
+  const confirmingTask = tasks.find((task) => task.id === confirmDeleteId) ?? null;
   useEffect(() => {
     setConfirmArmed(false);
     if (confirmDeleteId === null) return;
@@ -349,6 +352,11 @@ function TaskSidebarComponent({
       className={`sidebar ${capturesQuiet ? "captures-quiet" : ""}`}
       aria-label="Tasks, interruptions, and captured notifications"
     >
+      <div className="visually-hidden" role="status" aria-live="polite">
+        {confirmingTask && confirmArmed
+          ? `Ready. Press again to delete ${confirmingTask.title}, or Escape to keep it.`
+          : ""}
+      </div>
       <section className="sidebar-section task-section" aria-labelledby="tasks-heading">
         <div className="section-bar">
           <h2 id="tasks-heading">Today</h2>

@@ -156,9 +156,14 @@ describe("completed tasks", () => {
       expect(confirm.getAttribute("aria-disabled")).toBe("true");
       expect(confirm.className).toContain("arming");
 
+      // Focus is already on the button, and a screen reader does not re-announce
+      // a focused element changing state, so readiness has to be said aloud.
+      expect(screen.getByRole("status").textContent).toBe("");
+
       act(() => void vi.advanceTimersByTime(500));
       expect(confirm.getAttribute("aria-disabled")).toBe("false");
       expect(confirm.className).not.toContain("arming");
+      expect(screen.getByRole("status").textContent).toContain("Press again to delete Done last week");
     } finally {
       vi.useRealTimers();
     }

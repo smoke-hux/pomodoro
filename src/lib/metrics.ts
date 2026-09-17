@@ -209,14 +209,16 @@ export function getSevenDayCompletedFocusSeries(
     });
   }
 
-  const pointsByDate = new Map(series.map((point) => [point.date, point]));
-
   for (const session of sessions) {
     if (!isCompletedFocus(session)) {
       continue;
     }
 
-    const point = pointsByDate.get(getLocalDateKey(session.startedAt));
+    // A range check per day, not a date key per session: a stored timestamp
+    // no calendar can hold is left out instead of throwing.
+    const point = series.find((day) =>
+      isWithinDay(session.startedAt, getLocalDayBounds(day.dayStart)),
+    );
     if (point) {
       point.count += 1;
     }
@@ -263,8 +265,6 @@ export function formatClock(timestamp: number): string {
   return `${padTwo(date.getHours())}:${padTwo(date.getMinutes())}`;
 }
 
-// Coarse on purpose. A captured notification is triaged after the interval, so
-// the useful question is "roughly when", not "how many seconds ago".
 /**
  * A timestamp for a `<time dateTime>` attribute, or nothing if it is not one.
  * `toISOString` throws on an invalid date, and this runs while rendering.
@@ -274,6 +274,8 @@ export function toIsoTime(timestamp: number): string | undefined {
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
+// Coarse on purpose. A captured notification is triaged after the interval, so
+// the useful question is "roughly when", not "how many seconds ago".
 export function formatRelativeTime(timestamp: number, now: number): string {
   const elapsed = now - timestamp;
 

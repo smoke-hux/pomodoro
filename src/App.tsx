@@ -169,7 +169,9 @@ async function playCompletionChime() {
 }
 export default function App() {
   const inTauri = "__TAURI_INTERNALS__" in window;
-  const [snapshot, setSnapshot] = useState<AppSnapshot>(
+  // A function, so the preview snapshot — and the storage read inside it — is
+  // built once, not on every render and thrown away.
+  const [snapshot, setSnapshot] = useState<AppSnapshot>(() =>
     inTauri ? defaultSnapshot : browserPreview(),
   );
   const [captureOpen, setCaptureOpen] = useState(false);
@@ -606,7 +608,7 @@ export default function App() {
             <strong>Pomodoro could not read its saved data and has started fresh.</strong>{" "}
             {snapshot.recoveredStore
               ? `Nothing was deleted: the old file is kept as ${snapshot.recoveredStore}, next to pomodoro.json in the app’s data folder.`
-              : "The old file could not be set aside, so it will be replaced the next time anything is saved. Quit from the tray now if you want to keep it."}
+              : "The old file could not be moved aside either, so to leave it untouched nothing is being saved: what you do now is lost when Pomodoro quits. Move or repair pomodoro.json in the app’s data folder, then start Pomodoro again."}
           </p>
           <button className="text-button" type="button" onClick={() => setRecoveryDismissed(true)}>
             Dismiss

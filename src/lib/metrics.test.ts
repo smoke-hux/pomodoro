@@ -289,3 +289,25 @@ describe("day membership for stored timestamps", () => {
     expect(toIsoTime(noon)).toBe(new Date(noon).toISOString());
   });
 });
+
+describe("the seven-day series over stored timestamps", () => {
+  it("leaves out a session no calendar can hold instead of throwing", () => {
+    const now = new Date(2026, 8, 17, 12, 0, 0).getTime();
+    const session = (id: string, startedAt: number): SessionRecord => ({
+      id,
+      phase: "focus",
+      taskId: null,
+      taskTitle: null,
+      durationSeconds: 1_500,
+      startedAt,
+      endedAt: startedAt + 1_500_000,
+      outcome: "completed",
+    });
+
+    const series = getSevenDayCompletedFocusSeries(
+      [session("bad", 9e18), session("today", now - 3_600_000), session("yesterday", now - 86_400_000)],
+      now,
+    );
+    expect(series.map((day) => day.count)).toEqual([0, 0, 0, 0, 0, 1, 1]);
+  });
+});
