@@ -121,9 +121,26 @@ describe("the theme button after a burst of clicks", () => {
 
 describe("the completion chime when the first read failed", () => {
   it("treats the first broadcast as history and chimes for what completes after it", async () => {
-    const AudioContext = vi.fn(() => {
-      throw new Error("no audio in tests");
+    // Enough of the Web Audio API for the chime to run to the end quietly.
+    const param = { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() };
+    const node = () => ({
+      type: "sine",
+      frequency: { value: 0 },
+      gain: param,
+      connect: vi.fn(),
+      start: vi.fn(),
+      stop: vi.fn(),
+      onended: null,
     });
+    const AudioContext = vi.fn(() => ({
+      state: "running",
+      currentTime: 0,
+      destination: {},
+      createOscillator: node,
+      createGain: node,
+      resume: vi.fn(),
+      close: vi.fn(),
+    }));
     vi.stubGlobal("AudioContext", AudioContext);
     invoke.mockImplementation((command: string) =>
       command === "get_snapshot" ? Promise.reject("unavailable") : Promise.resolve(),
