@@ -6,7 +6,7 @@ mod storage;
 use std::{
     sync::{
         atomic::{AtomicI64, AtomicI8, Ordering},
-        Arc, Condvar, Mutex,
+        Arc, Condvar, Mutex, OnceLock,
     },
     thread,
     time::Duration,
@@ -46,6 +46,9 @@ struct RuntimeState {
     /// re-evaluates immediately instead of at its next scheduled wake-up.
     wake: Condvar,
     wake_lock: Mutex<()>,
+    /// The tray's start/pause item and the label it currently shows, set once
+    /// the tray is built. Kept so the item can say what it will do.
+    tray_toggle: OnceLock<(MenuItem<tauri::Wry>, Mutex<&'static str>)>,
 }
 
 /// While a phase is counting down the thread wakes at least this often, so a
@@ -161,11 +164,44 @@ fn notify_boundary(app: &AppHandle, completed: Phase, snapshot: &AppData) {
     let _ = app.notification().builder().title(title).body(body).show();
 }
 
+/// What the tray's start/pause item will do if clicked now. It used to read
+/// "Start / Pause" whatever the timer was doing, and the tray is exactly where
+/// the window is not there to show which one applies.
+fn toggle_label(status: TimerStatus, phase: Phase) -> &'static str {
+    match (status, phase) {
+        (TimerStatus::Running, _) => "Pause",
+        (TimerStatus::Paused, _) => "Resume",
+        (TimerStatus::Idle, Phase::Focus) => "Start focus",
+        (TimerStatus::Idle, Phase::ShortBreak | Phase::LongBreak) => "Start break",
+    }
+}
+
+/// Relabels the tray item, and only when the label actually changes: most
+/// publishes are a task edit or a filed notification, not a timer transition.
+fn sync_tray(app: &AppHandle, snapshot: &AppData) {
+    let state = app.state::<RuntimeState>();
+    let Some((item, shown)) = state.tray_toggle.get() else {
+        return;
+    };
+    let label = toggle_label(snapshot.timer.status, snapshot.timer.phase);
+    // Released before the item is touched: relabelling hops to the main
+    // thread and waits for it, and the main thread comes through here too
+    // when the tray menu itself is clicked.
+    let changed = shown
+        .lock()
+        .map(|mut shown| std::mem::replace(&mut *shown, label) != label)
+        .unwrap_or(false);
+    if changed {
+        let _ = item.set_text(label);
+    }
+}
+
 /// Broadcasts the new state to the window. This is the one channel through
 /// which the UI learns anything: commands do not return the state as well, so
 /// each change is serialised and sent once, not twice.
 fn publish(app: &AppHandle, snapshot: &AppData) {
     let _ = app.emit("state-changed", snapshot);
+    sync_tray(app, snapshot);
 }
 
 /// Files an observed notification, persists it and broadcasts the new state.
@@ -640,7 +676,14 @@ fn show_main_window(app: &AppHandle) {
 
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show Pomodoro", true, None::<&str>)?;
-    let toggle = MenuItem::with_id(app, "toggle", "Start / Pause", true, None::<&str>)?;
+    let state = app.state::<RuntimeState>();
+    let label = state
+        .data
+        .lock()
+        .map(|data| toggle_label(data.timer.status, data.timer.phase))
+        .unwrap_or("Start / Pause");
+    let toggle = MenuItem::with_id(app, "toggle", label, true, None::<&str>)?;
+    let _ = state.tray_toggle.set((toggle.clone(), Mutex::new(label)));
     let skip = MenuItem::with_id(app, "skip", "Skip interval", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -703,6 +746,7 @@ pub fn run() {
                 quiet_desire: AtomicI8::new(-1),
                 wake: Condvar::new(),
                 wake_lock: Mutex::new(()),
+                tray_toggle: OnceLock::new(),
             });
             build_tray(app)?;
 
@@ -761,6 +805,21 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pomodoro");
+}
+
+#[cfg(test)]
+mod tray {
+    use super::*;
+
+    #[test]
+    fn the_tray_item_names_what_a_click_will_do() {
+        assert_eq!(toggle_label(TimerStatus::Running, Phase::Focus), "Pause");
+        assert_eq!(toggle_label(TimerStatus::Running, Phase::ShortBreak), "Pause");
+        assert_eq!(toggle_label(TimerStatus::Paused, Phase::Focus), "Resume");
+        assert_eq!(toggle_label(TimerStatus::Idle, Phase::Focus), "Start focus");
+        assert_eq!(toggle_label(TimerStatus::Idle, Phase::ShortBreak), "Start break");
+        assert_eq!(toggle_label(TimerStatus::Idle, Phase::LongBreak), "Start break");
+    }
 }
 
 /// Checks that need a real GNOME session, standing in for the manual test plan:

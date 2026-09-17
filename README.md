@@ -13,7 +13,7 @@ Pomodoro is a local-first focus timer for Ubuntu. It follows the Pomodoro Techni
 - A daily session ledger with planned capacity, completed focus time, and interruptions
 - Accurate absolute deadlines across minimized windows, screen locks, and laptop suspend
 - Local JSON persistence, system-tray controls, and single-instance behavior
-- Keyboard navigation, high-contrast support, reduced-motion support, and light/dark themes
+- Keyboard navigation, high-contrast support, reduced-motion support, and light/dark themes that follow the desktop's appearance setting live, or stay fixed (toolbar button, or Settings → Appearance)
 
 Pomodoro is a standalone app. It does not require an account, use cloud sync, or send task data anywhere.
 

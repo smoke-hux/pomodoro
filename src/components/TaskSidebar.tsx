@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Circle,
   MoreHorizontal,
+  Pencil,
   Plus,
   Trash2,
 } from "lucide-react";
@@ -13,6 +14,7 @@ import type {
   FocusTask,
   Interruption,
 } from "../types";
+import { getLocalDateKey } from "../lib/metrics";
 import { NotificationInbox } from "./NotificationInbox";
 
 interface TaskSidebarProps {
@@ -24,8 +26,12 @@ interface TaskSidebarProps {
   activeTaskId: string | null;
   addRequest: number;
   selectionLocked: boolean;
+  /** Today's local date; changes at midnight so "Completed today" rolls over. */
+  dayKey: string;
   onSelectTask: (id: string) => void;
-  onAddTask: (title: string, estimate: number) => Promise<void>;
+  /** Both resolve to whether the change was accepted, so a refused one keeps its form open. */
+  onAddTask: (title: string, estimate: number) => Promise<boolean>;
+  onUpdateTask: (id: string, title: string, estimate: number) => Promise<boolean>;
   onToggleTask: (id: string) => void;
   onDeleteTask: (id: string) => void;
   onOpenCapture: () => void;
@@ -38,6 +44,113 @@ interface TaskSidebarProps {
   onOpenSettings: () => void;
 }
 
+interface TaskComposerProps {
+  /** Prefixes the field ids, so the add and edit forms never share one. */
+  idPrefix: string;
+  initialTitle?: string;
+  initialEstimate?: number;
+  submitLabel: string;
+  onSubmit: (title: string, estimate: number) => Promise<boolean>;
+  onCancel: () => void;
+}
+
+/** The title-and-estimate form, used both to add a task and to edit one. */
+function TaskComposer({
+  idPrefix,
+  initialTitle = "",
+  initialEstimate = 1,
+  submitLabel,
+  onSubmit,
+  onCancel,
+}: TaskComposerProps) {
+  const [title, setTitle] = useState(initialTitle);
+  const [estimate, setEstimate] = useState(initialEstimate);
+  const [saving, setSaving] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+
+  const submit = async () => {
+    const cleaned = title.trim();
+    if (!cleaned || saving) return;
+    setSaving(true);
+    // On success the parent unmounts this form; on refusal it stays, with
+    // what was typed, under the notice that says why.
+    const accepted = await onSubmit(cleaned, estimate);
+    if (!accepted) setSaving(false);
+  };
+
+  return (
+    <form
+      className="task-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void submit();
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") return;
+        event.stopPropagation();
+        onCancel();
+      }}
+    >
+      <label htmlFor={`${idPrefix}-title`}>Task</label>
+      <input
+        id={`${idPrefix}-title`}
+        ref={inputRef}
+        value={title}
+        onChange={(event) => setTitle(event.target.value)}
+        placeholder="What will you focus on?"
+        maxLength={160}
+      />
+      <div className="task-form-row">
+        <label htmlFor={`${idPrefix}-estimate`}>Estimate</label>
+        <div className="estimate-stepper">
+          <button
+            type="button"
+            onClick={() => setEstimate((value) => Math.max(1, value - 1))}
+            aria-label="Decrease estimate"
+          >
+            −
+          </button>
+          <output htmlFor={`${idPrefix}-estimate`}>{estimate}</output>
+          <input
+            id={`${idPrefix}-estimate`}
+            className="visually-hidden"
+            type="number"
+            min={1}
+            max={16}
+            value={estimate}
+            onChange={(event) =>
+              setEstimate(Math.min(16, Math.max(1, Number(event.target.value) || 1)))
+            }
+          />
+          <button
+            type="button"
+            onClick={() => setEstimate((value) => Math.min(16, value + 1))}
+            aria-label="Increase estimate"
+          >
+            +
+          </button>
+        </div>
+        <div className="form-actions">
+          <button className="text-button" type="button" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="small-primary" type="submit" disabled={!title.trim() || saving}>
+            {submitLabel}
+          </button>
+        </div>
+      </div>
+      {estimate > 4 && (
+        <p className="form-hint">Consider splitting work above four focus sessions.</p>
+      )}
+    </form>
+  );
+}
+
 function TaskSidebarComponent({
   tasks,
   interruptions,
@@ -47,8 +160,10 @@ function TaskSidebarComponent({
   activeTaskId,
   addRequest,
   selectionLocked,
+  dayKey,
   onSelectTask,
   onAddTask,
+  onUpdateTask,
   onToggleTask,
   onDeleteTask,
   onOpenCapture,
@@ -61,16 +176,15 @@ function TaskSidebarComponent({
   onOpenSettings,
 }: TaskSidebarProps) {
   const [adding, setAdding] = useState(false);
-  const [title, setTitle] = useState("");
-  const [estimate, setEstimate] = useState(1);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const openTasks = tasks.filter((task) => !task.done);
-  const completedTasks = tasks.filter((task) => task.done);
+  // The heading says "today", so it lists today. Tasks finished on an earlier
+  // day used to pile up under it for good, with no way to remove them.
+  const completedToday = tasks.filter(
+    (task) => task.done && task.completedAt !== null && getLocalDateKey(task.completedAt) === dayKey,
+  );
+  const completedEarlier = tasks.filter((task) => task.done && !completedToday.includes(task));
   const openInterruptions = interruptions.filter((item) => !item.handled);
-
-  useEffect(() => {
-    if (adding) inputRef.current?.focus();
-  }, [adding]);
 
   // Ctrl+N raises this counter. Reacting to it keeps the shortcut owned by the
   // component that holds the composer, rather than reaching across the DOM for
@@ -79,14 +193,37 @@ function TaskSidebarComponent({
     if (addRequest > 0) setAdding(true);
   }, [addRequest]);
 
-  const submit = async () => {
-    const cleaned = title.trim();
-    if (!cleaned) return;
-    await onAddTask(cleaned, estimate);
-    setTitle("");
-    setEstimate(1);
-    setAdding(false);
+  const submitNew = async (title: string, estimate: number) => {
+    const accepted = await onAddTask(title, estimate);
+    if (accepted) setAdding(false);
+    return accepted;
   };
+
+  const completedRow = (task: FocusTask) => (
+    <div className="task-row completed" key={task.id}>
+      <button
+        className="task-check"
+        type="button"
+        onClick={() => onToggleTask(task.id)}
+        aria-label={`Reopen ${task.title}`}
+      >
+        <CheckCircle2 aria-hidden="true" size={17} />
+      </button>
+      <span className="completed-title">{task.title}</span>
+      <span className="task-count">
+        {task.completedPomodoros} / {task.estimate}
+      </span>
+      <button
+        className="row-delete"
+        type="button"
+        onClick={() => onDeleteTask(task.id)}
+        aria-label={`Delete ${task.title}`}
+        title="Delete"
+      >
+        <Trash2 aria-hidden="true" size={15} />
+      </button>
+    </div>
+  );
 
   // A section with nothing filed in it should not hold a third of the sidebar
   // open. When capture is quiet the row collapses to its heading and one line.
@@ -112,73 +249,12 @@ function TaskSidebarComponent({
         </div>
 
         {adding && (
-          <form
-            className="task-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void submit();
-            }}
-          >
-            <label htmlFor="new-task-title">Task</label>
-            <input
-              id="new-task-title"
-              ref={inputRef}
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              placeholder="What will you focus on?"
-              maxLength={160}
-            />
-            <div className="task-form-row">
-              <label htmlFor="new-task-estimate">Estimate</label>
-              <div className="estimate-stepper">
-                <button
-                  type="button"
-                  onClick={() => setEstimate((value) => Math.max(1, value - 1))}
-                  aria-label="Decrease estimate"
-                >
-                  −
-                </button>
-                <output htmlFor="new-task-estimate">{estimate}</output>
-                <input
-                  id="new-task-estimate"
-                  className="visually-hidden"
-                  type="number"
-                  min={1}
-                  max={16}
-                  value={estimate}
-                  onChange={(event) =>
-                    setEstimate(
-                      Math.min(16, Math.max(1, Number(event.target.value) || 1)),
-                    )
-                  }
-                />
-                <button
-                  type="button"
-                  onClick={() => setEstimate((value) => Math.min(16, value + 1))}
-                  aria-label="Increase estimate"
-                >
-                  +
-                </button>
-              </div>
-              <div className="form-actions">
-                <button
-                  className="text-button"
-                  type="button"
-                  onClick={() => setAdding(false)}
-                >
-                  Cancel
-                </button>
-                <button className="small-primary" type="submit" disabled={!title.trim()}>
-                  Add
-                </button>
-              </div>
-            </div>
-            {estimate > 4 && (
-              <p className="form-hint">
-                Consider splitting work above four focus sessions.
-              </p>
-            )}
-          </form>
+          <TaskComposer
+            idPrefix="new-task"
+            submitLabel="Add"
+            onSubmit={submitNew}
+            onCancel={() => setAdding(false)}
+          />
         )}
 
         <div className="task-list" role="list" aria-label="Open tasks">
@@ -188,68 +264,79 @@ function TaskSidebarComponent({
               Add your first task
             </button>
           ) : (
-            openTasks.map((task) => (
-              <div
-                className={`task-row ${task.id === activeTaskId ? "selected" : ""}`}
-                key={task.id}
-                role="listitem"
-              >
-                <button
-                  className="task-check"
-                  type="button"
-                  onClick={() => onToggleTask(task.id)}
-                  aria-label={`Mark ${task.title} complete`}
+            openTasks.map((task) =>
+              task.id === editingId ? (
+                <div role="listitem" key={task.id}>
+                  <TaskComposer
+                    idPrefix={`edit-${task.id}`}
+                    initialTitle={task.title}
+                    initialEstimate={task.estimate}
+                    submitLabel="Save"
+                    onSubmit={async (title, estimate) => {
+                      const accepted = await onUpdateTask(task.id, title, estimate);
+                      if (accepted) setEditingId(null);
+                      return accepted;
+                    }}
+                    onCancel={() => setEditingId(null)}
+                  />
+                </div>
+              ) : (
+                <div
+                  className={`task-row ${task.id === activeTaskId ? "selected" : ""}`}
+                  key={task.id}
+                  role="listitem"
                 >
-                  <Circle aria-hidden="true" size={17} />
-                </button>
-                <button
-                  className="task-select"
-                  type="button"
-                  onClick={() => onSelectTask(task.id)}
-                  disabled={selectionLocked}
-                  aria-pressed={task.id === activeTaskId}
-                  aria-label={`${task.title}, ${task.completedPomodoros} of ${task.estimate} sessions`}
-                  title={selectionLocked ? "Finish or reset the current focus before switching tasks" : "Select for focus"}
-                >
-                  <span className="task-title">{task.title}</span>
-                  <span className="task-count" aria-hidden="true">
-                    {task.completedPomodoros} / {task.estimate}
-                  </span>
-                </button>
-                <details className="row-menu">
-                  <summary aria-label={`More actions for ${task.title}`}>
-                    <MoreHorizontal aria-hidden="true" size={17} />
-                  </summary>
-                  <div className="menu-popover">
-                    <button type="button" onClick={() => onDeleteTask(task.id)}>
-                      <Trash2 aria-hidden="true" size={15} /> Delete
-                    </button>
-                  </div>
-                </details>
-              </div>
-            ))
+                  <button
+                    className="task-check"
+                    type="button"
+                    onClick={() => onToggleTask(task.id)}
+                    aria-label={`Mark ${task.title} complete`}
+                  >
+                    <Circle aria-hidden="true" size={17} />
+                  </button>
+                  <button
+                    className="task-select"
+                    type="button"
+                    onClick={() => onSelectTask(task.id)}
+                    disabled={selectionLocked}
+                    aria-pressed={task.id === activeTaskId}
+                    aria-label={`${task.title}, ${task.completedPomodoros} of ${task.estimate} sessions`}
+                    title={selectionLocked ? "Finish or reset the current focus before switching tasks" : "Select for focus"}
+                  >
+                    <span className="task-title">{task.title}</span>
+                    <span className="task-count" aria-hidden="true">
+                      {task.completedPomodoros} / {task.estimate}
+                    </span>
+                  </button>
+                  <details className="row-menu">
+                    <summary aria-label={`More actions for ${task.title}`}>
+                      <MoreHorizontal aria-hidden="true" size={17} />
+                    </summary>
+                    <div className="menu-popover">
+                      <button type="button" onClick={() => setEditingId(task.id)}>
+                        <Pencil aria-hidden="true" size={15} /> Edit
+                      </button>
+                      <button type="button" onClick={() => onDeleteTask(task.id)}>
+                        <Trash2 aria-hidden="true" size={15} /> Delete
+                      </button>
+                    </div>
+                  </details>
+                </div>
+              ),
+            )
           )}
         </div>
 
-        {completedTasks.length > 0 && (
+        {completedToday.length > 0 && (
           <details className="completed-group">
-            <summary>Completed today ({completedTasks.length})</summary>
-            {completedTasks.map((task) => (
-              <div className="task-row completed" key={task.id}>
-                <button
-                  className="task-check"
-                  type="button"
-                  onClick={() => onToggleTask(task.id)}
-                  aria-label={`Reopen ${task.title}`}
-                >
-                  <CheckCircle2 aria-hidden="true" size={17} />
-                </button>
-                <span className="completed-title">{task.title}</span>
-                <span className="task-count">
-                  {task.completedPomodoros} / {task.estimate}
-                </span>
-              </div>
-            ))}
+            <summary>Completed today ({completedToday.length})</summary>
+            {completedToday.map(completedRow)}
+          </details>
+        )}
+        {completedEarlier.length > 0 && (
+          <details className="completed-group">
+            <summary>Completed earlier ({completedEarlier.length})</summary>
+            {completedEarlier.map(completedRow)}
           </details>
         )}
       </section>

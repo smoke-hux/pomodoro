@@ -3,6 +3,8 @@ import { ChevronDown } from "lucide-react";
 import type { FocusTask, Interruption, SessionRecord } from "../types";
 
 interface DayLedgerProps {
+  /** Today's local date. Not read — a new value at midnight is what gets the memoised ledger to work "today" out again. */
+  dayKey: string;
   sessions: SessionRecord[];
   tasks: FocusTask[];
   interruptions: Interruption[];
