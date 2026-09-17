@@ -24,7 +24,7 @@ Install the generated Debian package:
 
     sudo apt install ./src-tauri/target/release/bundle/deb/Pomodoro_0.1.0_amd64.deb
 
-Open Pomodoro from the Ubuntu application launcher. Closing the window hides it in the system tray so an active timer can continue. Choose Quit from the tray menu to exit completely.
+Open Pomodoro from the Ubuntu application launcher. Closing the window hides it in the system tray so an active timer can continue. Choose Quit from the tray menu to exit completely. Quitting pauses a running interval rather than letting it run out while the app is closed: the next launch shows it paused with the time it had left, and no session is recorded for time you were not there for.
 
 This local package was built on Ubuntu 24.04 x86_64 and is directly verified for Ubuntu 24.04 or newer. To support Ubuntu 22.04 with the widest binary compatibility, build the release on Ubuntu 22.04.
 

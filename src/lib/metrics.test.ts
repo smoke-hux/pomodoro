@@ -90,6 +90,7 @@ describe("local-day metrics", () => {
         capturedAt: localTime(2026, 8, 1, 23, 59, 59),
         handled: false,
         taskId: null,
+        convertedTaskId: null,
       },
       {
         id: "start",
@@ -98,6 +99,7 @@ describe("local-day metrics", () => {
         capturedAt: localTime(2026, 8, 2),
         handled: true,
         taskId: "task-a",
+        convertedTaskId: null,
       },
       {
         id: "late",
@@ -106,6 +108,7 @@ describe("local-day metrics", () => {
         capturedAt: localTime(2026, 8, 2, 23, 59, 59),
         handled: false,
         taskId: "task-a",
+        convertedTaskId: null,
       },
       {
         id: "after",
@@ -114,6 +117,7 @@ describe("local-day metrics", () => {
         capturedAt: localTime(2026, 8, 3),
         handled: true,
         taskId: null,
+        convertedTaskId: null,
       },
     ];
 
@@ -151,6 +155,7 @@ describe("focus totals", () => {
         capturedAt: 1,
         handled: true,
         taskId: null,
+        convertedTaskId: null,
       },
       {
         id: "two",
@@ -159,6 +164,7 @@ describe("focus totals", () => {
         capturedAt: 2,
         handled: false,
         taskId: "task-a",
+        convertedTaskId: null,
       },
       {
         id: "three",
@@ -167,6 +173,7 @@ describe("focus totals", () => {
         capturedAt: 3,
         handled: false,
         taskId: "task-a",
+        convertedTaskId: null,
       },
     ];
 

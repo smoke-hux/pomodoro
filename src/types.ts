@@ -109,8 +109,14 @@ export interface Interruption {
   category: "internal" | "external";
   capturedAt: number;
   handled: boolean;
-  /** The task this note was turned into, so it cannot be turned twice. */
+  /** The task that was selected when the note was captured, if any. */
   taskId: string | null;
+  /**
+   * The task this note was turned into, so it cannot be turned twice. Separate
+   * from `taskId`: one field used to do both jobs, so a note captured during a
+   * task — the usual case — looked already converted and never became one.
+   */
+  convertedTaskId: string | null;
 }
 
 export interface SessionRecord {
