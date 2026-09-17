@@ -19,19 +19,18 @@ export function useCountdown(timer: TimerState, now: () => number = Date.now): n
   const { status, endsAt, remainingSeconds } = timer;
   const running = status === "running" && endsAt !== null;
 
-  const [remaining, setRemaining] = useState(() =>
-    running ? secondsUntil(endsAt, now()) : remainingSeconds,
-  );
+  // The ticking value, tagged with the deadline it was counted against.
+  const [ticked, setTicked] = useState(() => ({
+    endsAt,
+    remaining: running ? secondsUntil(endsAt, now()) : remainingSeconds,
+  }));
 
   useEffect(() => {
-    if (!running) {
-      setRemaining(remainingSeconds);
-      return;
-    }
+    if (!running) return;
     let timeout: number | null = null;
     const tick = () => {
       const current = now();
-      setRemaining(secondsUntil(endsAt, current));
+      setTicked({ endsAt, remaining: secondsUntil(endsAt, current) });
       if (current >= endsAt) return;
       // Wake on the next whole-second boundary of the deadline, not on a
       // free-running interval that drifts against it. Exactly on a boundary
@@ -43,9 +42,16 @@ export function useCountdown(timer: TimerState, now: () => number = Date.now): n
     return () => {
       if (timeout !== null) window.clearTimeout(timeout);
     };
-  }, [running, endsAt, remainingSeconds, now]);
+  }, [running, endsAt, now]);
 
-  return remaining;
+  // Worked out while rendering, not copied into state by an effect afterwards.
+  // The effect ran one render late: at every phase change the window drew the
+  // new phase with the old interval's 00:00 — full progress bar, "0m" in the
+  // title — and then corrected itself, a flash at each boundary. Stopped, the
+  // answer is the stored value. Running, it is the ticked value unless that was
+  // counted against a different deadline, in which case it is computed now.
+  if (!running) return remainingSeconds;
+  return ticked.endsAt === endsAt ? ticked.remaining : secondsUntil(endsAt, now());
 }
 
 /** Whole seconds from `nowMs` to `endsAt`, never negative. */

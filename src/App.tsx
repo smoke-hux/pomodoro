@@ -266,24 +266,7 @@ export default function App() {
   useEffect(() => {
     if (!inTauri) return;
     let cancelled = false;
-    void api
-      .snapshot()
-      .then((next) => {
-        if (cancelled) return;
-        for (const session of next.sessions) {
-          knownSessionIds.current.add(session.id);
-        }
-        hasSessionBaseline.current = true;
-        setSnapshot(next);
-        setSettingsLoaded(true);
-        setReady(true);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setReady(true);
-          showNotice("Pomodoro could not open its local data.");
-        }
-      });
+    let receivedBroadcast = false;
 
     const unlisten = listen<AppSnapshot>("state-changed", (event) => {
       if (cancelled) return;
@@ -304,9 +287,39 @@ export default function App() {
       if (hasNewCompletion && event.payload.settings.sound) {
         void playCompletionChime();
       }
+      receivedBroadcast = true;
       setSnapshot(event.payload);
       setSettingsLoaded(true);
     });
+
+    // Listening first, asking second. The other way round left a gap: a change
+    // broadcast after the snapshot was taken but before the listener was
+    // registered was never seen, and the window showed a finished interval as
+    // still running until something else happened. And once a broadcast has
+    // been applied it is the newer of the two, so a snapshot that arrives
+    // after it must not replace it.
+    void unlisten
+      .then(
+        () => undefined,
+        () => undefined,
+      )
+      .then(() => api.snapshot())
+      .then((next) => {
+        if (cancelled) return;
+        for (const session of next.sessions) {
+          knownSessionIds.current.add(session.id);
+        }
+        hasSessionBaseline.current = true;
+        if (!receivedBroadcast) setSnapshot(next);
+        setSettingsLoaded(true);
+        setReady(true);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setReady(true);
+          showNotice("Pomodoro could not open its local data.");
+        }
+      });
 
     return () => {
       cancelled = true;
@@ -394,7 +407,10 @@ export default function App() {
   );
   const handleInterruption = useCallback(
     (id: string, handled: boolean) =>
-      void run(() => api.setInterruptionHandled(id, handled), "Marked handled."),
+      void run(
+        () => api.setInterruptionHandled(id, handled),
+        handled ? "Marked handled." : "Moved back to the inbox.",
+      ),
     [run],
   );
   const convertInterruption = useCallback(
@@ -422,15 +438,12 @@ export default function App() {
     [run],
   );
   const saveInterruption = useCallback(
-    async (text: string, category: "internal" | "external") => {
-      await run(() => api.captureInterruption(text, category), "Saved. Return to your focus.");
-    },
+    (text: string, category: "internal" | "external") =>
+      run(() => api.captureInterruption(text, category), "Saved. Return to your focus."),
     [run],
   );
   const saveSettings = useCallback(
-    async (settings: Settings) => {
-      await run(() => api.updateSettings(settings), "Settings saved.");
-    },
+    (settings: Settings) => run(() => api.updateSettings(settings), "Settings saved."),
     [run],
   );
   const clearHistory = useCallback(async () => {
@@ -502,6 +515,10 @@ export default function App() {
       if (captureOpen || settingsOpen) return;
       if (isTextEntry(event.target)) return;
       if (event.code === "Space") {
+        // A held key repeats, and every repeat was another start or pause —
+        // dozens of saves, ending in whichever state the last one landed on.
+        // With a modifier it is somebody else's shortcut, not this one.
+        if (event.repeat || event.ctrlKey || event.altKey || event.metaKey) return;
         // The focused control gets its own key back.
         if (activatesOnSpace(event.target)) return;
         event.preventDefault();
@@ -535,6 +552,10 @@ export default function App() {
     toggleTimer,
   ]);
 
+  // While a dialog is open everything behind it is inert: not focusable, not
+  // clickable, not read out. The dialogs promise that with aria-modal, and
+  // nothing but this makes it so.
+  const behindModal = captureOpen || settingsOpen;
   const showRecovery = snapshot.recoveredStore !== null && !recoveryDismissed;
   const shellClass = `app-shell status-${timer.status} phase-${timer.phase}${showRecovery ? " has-banner" : ""}`;
   const ThemeIcon = themeIcons[theme];
@@ -555,7 +576,7 @@ export default function App() {
 
   return (
     <main className={shellClass}>
-      <header className="app-toolbar">
+      <header className="app-toolbar" inert={behindModal}>
         <button
           className="icon-button mobile-only"
           type="button"
@@ -616,7 +637,7 @@ export default function App() {
         </div>
       )}
 
-      <div className="workspace">
+      <div className="workspace" inert={behindModal}>
         <div className={`sidebar-wrap ${sidebarOpen ? "open" : ""}`}>
           <TaskSidebar
             tasks={snapshot.tasks}

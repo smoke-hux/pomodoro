@@ -262,3 +262,86 @@ describe("the browser preview", () => {
     }
   });
 });
+
+describe("start-up", () => {
+  it("is listening for changes before it asks for the first snapshot", async () => {
+    // Asked first, a change made in between was never seen and the window
+    // showed the older state until something else happened.
+    const order: string[] = [];
+    const previous = broadcast;
+    invoke.mockImplementation((command: string) => {
+      if (command === "get_snapshot") order.push(broadcast === previous ? "snapshot-first" : "listening-first");
+      return Promise.resolve(command === "get_snapshot" ? defaultSnapshot : undefined);
+    });
+    render(<App />);
+    await screen.findByRole("button", { name: "Open settings" });
+
+    expect(order).toEqual(["listening-first"]);
+  });
+
+  it("does not let a late first snapshot replace a newer broadcast", async () => {
+    let deliver: (snapshot: AppSnapshot) => void = () => {};
+    invoke.mockImplementation((command: string) =>
+      command === "get_snapshot"
+        ? new Promise<AppSnapshot>((resolve) => (deliver = resolve))
+        : Promise.resolve(),
+    );
+    render(<App />);
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("get_snapshot"));
+
+    const newer: AppSnapshot = {
+      ...defaultSnapshot,
+      timer: { ...defaultSnapshot.timer, phase: "shortBreak", durationSeconds: 300, remainingSeconds: 300 },
+    };
+    await act(async () => broadcast(newer));
+    await act(async () => deliver(defaultSnapshot)); // older: still says focus
+
+    const shortBreak = await screen.findByRole("button", { name: "Short break" });
+    expect(shortBreak.getAttribute("aria-pressed")).toBe("true");
+  });
+});
+
+describe("the Space shortcut", () => {
+  function toggles() {
+    return invoke.mock.calls.filter(([command]) => command === "toggle_timer").length;
+  }
+
+  it("acts on the press, not on every repeat of a held key, and not with a modifier", async () => {
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === "get_snapshot" ? defaultSnapshot : undefined),
+    );
+    render(<App />);
+    await screen.findByRole("button", { name: "Open settings" });
+
+    fireEvent.keyDown(document.body, { code: "Space", key: " " });
+    expect(toggles()).toBe(1);
+
+    for (let repeat = 0; repeat < 20; repeat += 1) {
+      fireEvent.keyDown(document.body, { code: "Space", key: " ", repeat: true });
+    }
+    fireEvent.keyDown(document.body, { code: "Space", key: " ", ctrlKey: true });
+    fireEvent.keyDown(document.body, { code: "Space", key: " ", altKey: true });
+    expect(toggles()).toBe(1);
+  });
+});
+
+describe("an open dialog", () => {
+  it("makes everything behind it inert, so a focused control there cannot be pressed", async () => {
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === "get_snapshot" ? defaultSnapshot : undefined),
+    );
+    const { container } = render(<App />);
+    const toolbar = () => container.querySelector(".app-toolbar") as HTMLElement;
+    const workspace = () => container.querySelector(".workspace") as HTMLElement;
+    fireEvent.click(await screen.findByRole("button", { name: "Open settings" }));
+    await screen.findByRole("dialog");
+
+    expect(toolbar().inert ?? toolbar().hasAttribute("inert")).toBeTruthy();
+    expect(workspace().inert ?? workspace().hasAttribute("inert")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(toolbar().hasAttribute("inert")).toBe(false);
+    expect(workspace().hasAttribute("inert")).toBe(false);
+  });
+});

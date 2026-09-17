@@ -63,6 +63,16 @@ function TimerPanelComponent({
     onSkip();
   };
 
+  // Said and shown from the same string. The label used to be worked out
+  // separately, unclamped and blind to the phase: "Round 5 of 4" was announced
+  // over a screen reading "Cycle complete".
+  const cycleText =
+    timer.phase === "focus"
+      ? `Round ${Math.min(timer.completedInCycle + 1, roundsBeforeLongBreak)} of ${roundsBeforeLongBreak}`
+      : timer.phase === "longBreak"
+        ? "Cycle complete"
+        : `${timer.completedInCycle} of ${roundsBeforeLongBreak} rounds`;
+
   const actionLabel =
     timer.status === "running"
       ? "Pause"
@@ -88,14 +98,8 @@ function TimerPanelComponent({
         ))}
       </div>
 
-      <div className="cycle-count" aria-label={`Round ${timer.completedInCycle + 1} of ${roundsBeforeLongBreak}`}>
-        <span>
-          {timer.phase === "focus"
-            ? `Round ${Math.min(timer.completedInCycle + 1, roundsBeforeLongBreak)} of ${roundsBeforeLongBreak}`
-            : timer.phase === "longBreak"
-              ? "Cycle complete"
-              : `${timer.completedInCycle} of ${roundsBeforeLongBreak} rounds`}
-        </span>
+      <div className="cycle-count" aria-label={cycleText}>
+        <span>{cycleText}</span>
         <span className="round-marks" aria-hidden="true">
           {Array.from({ length: roundsBeforeLongBreak }, (_, index) => (
             <i key={index} className={index < timer.completedInCycle ? "filled" : ""} />

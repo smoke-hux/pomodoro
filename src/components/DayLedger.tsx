@@ -27,7 +27,10 @@ function DayLedgerComponent({ dayKey, sessions, tasks, interruptions }: DayLedge
     (session) => session.phase === "focus" && session.outcome === "completed",
   );
   // The sum of what the rows below show, and the same figure as the toolbar:
-  // three numbers on one screen that have to agree.
+  // three numbers on one screen that have to agree. Which is why every one of
+  // today's sessions is listed — the list scrolls — rather than the newest
+  // twelve: six pomodoros with their breaks is already twelve records, and the
+  // total went on counting rows that had dropped off the end.
   const focusMinutes = getCompletedFocusDisplayMinutes(focus);
   const planned = tasks
     .filter((task) => !task.done || isToday(task.completedAt))
@@ -60,7 +63,7 @@ function DayLedgerComponent({ dayKey, sessions, tasks, interruptions }: DayLedge
           {today.length === 0 ? (
             <p className="empty-ledger">Completed sessions will appear here.</p>
           ) : (
-            today.slice(0, 12).map((session) => (
+            today.map((session) => (
               <div className="session-row" role="listitem" key={session.id}>
                 <time dateTime={toIsoTime(session.startedAt)}>
                   {new Date(session.startedAt).toLocaleTimeString([], {
