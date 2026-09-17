@@ -37,8 +37,8 @@ interface SettingsDialogProps {
   onClose: () => void;
   /** Resolves to whether the settings were saved. A refused save keeps the dialog and the edits. */
   onSave: (settings: Settings) => Promise<boolean>;
-  /** Plays the interval-finished sound once, so it can be heard before relying on it. */
-  onPreviewSound: () => void;
+  /** Plays the interval-finished sound once, so it can be heard before relying on it. Resolves when it has played or failed. */
+  onPreviewSound: () => Promise<boolean>;
   onClearHistory: () => Promise<void>;
   onClearNotifications: () => Promise<void>;
 }
@@ -244,6 +244,7 @@ function SettingsDialogComponent({
   const [confirmClear, setConfirmClear] = useState(false);
   const [confirmClearNotifications, setConfirmClearNotifications] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
   const dialogRef = useRef<HTMLElement>(null);
   useModalFocus(open, dialogRef);
 
@@ -402,8 +403,16 @@ function SettingsDialogComponent({
               </label>
               <div className="setting-row">
                 <span className="setting-hint">Hear the interval-finished sound now.</span>
-                <button className="text-button" type="button" onClick={onPreviewSound}>
-                  Test sound
+                <button
+                  className="text-button"
+                  type="button"
+                  disabled={previewing}
+                  onClick={() => {
+                    setPreviewing(true);
+                    void onPreviewSound().finally(() => setPreviewing(false));
+                  }}
+                >
+                  {previewing ? "Playing…" : "Test sound"}
                 </button>
               </div>
             </fieldset>

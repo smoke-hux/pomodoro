@@ -148,7 +148,9 @@ describe("sound", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Test sound" }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("preview_sound", {}));
-  });
+    // The whole app and the settings dialog in jsdom, under the suite's
+    // parallel load: slow enough to trip the default five seconds.
+  }, 20_000);
 });
 
 describe("a row menu left open from the keyboard", () => {

@@ -391,7 +391,10 @@ export default function App() {
     (settings: Settings) => run(() => api.updateSettings(settings), "Settings saved."),
     [run],
   );
-  const previewSound = useCallback(() => void run(api.previewSound), [run]);
+  // Resolves once the sound has played or failed: the backend answers only
+  // then, so the button can say it is playing and the failure, if any, is
+  // shown as a notice.
+  const previewSound = useCallback(() => run(api.previewSound), [run]);
   const clearHistory = useCallback(async () => {
     await run(api.clearHistory, "Session history cleared.");
   }, [run]);

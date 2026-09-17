@@ -23,12 +23,29 @@
 //! control; a switch elsewhere silently defeating a setting the user turned on
 //! here reads as a bug, not as a preference.
 //!
+//! The end of an interval is the sound that must not be lost. Only one sound
+//! plays at a time, and a request that arrives while another is playing used to
+//! be dropped whichever it was — so ticking a task off a second before the
+//! interval ran out, or pressing Test sound, silenced the alarm, and with
+//! notifications off the interval then ended with nothing at all. An alarm
+//! that arrives while a lesser sound is playing now waits its turn and plays
+//! next; everything else arriving mid-sound is still dropped, since two chimes
+//! on top of each other are worse than one.
+//!
+//! The ways of playing are tried in stages, and nothing is worked out before it
+//! is needed. The theme player takes an id and needs no file, so the theme is
+//! only searched by hand — a `gsettings` call and a walk over the disk — once
+//! it has failed; doing that first delayed every alarm for a result that was
+//! then thrown away. And an interval that finds no `alarm-clock-elapsed` by any
+//! route borrows `complete` by every route, the theme player included: Yaru
+//! ships no alarm sound, so on a machine without the `freedesktop` theme the
+//! theme player refused the alarm and was never asked for the chime it had.
+//!
 //! [`play`] never blocks its caller, which may be the timer's reconciliation
-//! thread or the main thread: everything, including asking `gsettings` for the
-//! theme, happens on a short-lived thread of its own. Every child is waited
-//! for, because this is a tray application that runs for days and a child that
-//! is dropped unwaited stays a zombie for all of them. A player that hangs —
-//! an audio server with no usable sink will do it — is killed at a deadline.
+//! thread or the main thread: everything happens on a short-lived thread of
+//! its own. Children are run through [`crate::system`]: outside the AppImage's
+//! environment, always reaped, and killed at a deadline — an audio server with
+//! no usable sink will make a player hang.
 //!
 //! Every failure here is soft. A machine with no player, no theme or no audio
 //! at all stays silent and says so once on stderr; the timer, the store and
@@ -38,13 +55,15 @@
 use std::{
     env,
     ffi::OsString,
-    io::Read,
+    fs,
     path::{Path, PathBuf},
-    process::{Child, Command, ExitStatus, Stdio},
-    sync::atomic::{AtomicBool, Ordering},
+    process::{Command, Stdio},
+    sync::{mpsc, Mutex, PoisonError},
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
+
+use crate::system;
 
 const SCHEMA: &str = "org.gnome.desktop.sound";
 const KEY: &str = "theme-name";
@@ -55,16 +74,17 @@ const PLAYER_DEADLINE: Duration = Duration::from_secs(15);
 /// How often a running player is looked in on. Only the noticing of its end
 /// waits on this, never the start of the sound.
 const PLAYER_POLL: Duration = Duration::from_millis(100);
-/// `gsettings` answers in a few milliseconds or not at all. It runs before
-/// the sound, so it is looked in on more often and given up on much sooner.
-const GSETTINGS_DEADLINE: Duration = Duration::from_secs(2);
-const GSETTINGS_POLL: Duration = Duration::from_millis(10);
 
 /// Where themes live when they are not the user's own.
 const SYSTEM_SOUNDS: &str = "/usr/share/sounds";
 /// Tried in this order within each directory. `.oga` is what the stock themes
 /// ship; the other two are what the sound theme specification also allows.
 const EXTENSIONS: [&str; 3] = ["oga", "ogg", "wav"];
+/// Themes searched after the user's own chain: Ubuntu's default, which may hold
+/// an id the user's theme does not, and the one every theme ends at.
+const STOCK_THEMES: [&str; 2] = ["Yaru", "freedesktop"];
+/// An `Inherits` chain longer than this is a loop or a mistake.
+const MAX_THEMES: usize = 8;
 
 /// Something worth a sound.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,16 +97,6 @@ pub enum Cue {
 }
 
 impl Cue {
-    /// The id in the freedesktop sound naming specification.
-    /// `alarm-clock-elapsed` is defined there as "a user configured alarm
-    /// elapsed", which is exactly what the end of an interval is.
-    fn event_id(self) -> &'static str {
-        match self {
-            Cue::IntervalFinished => "alarm-clock-elapsed",
-            Cue::TaskDone => "complete",
-        }
-    }
-
     /// What the sound is, for the audio server's own listing of what is
     /// playing. Fixed text: nothing of the user's goes on a command line.
     fn description(self) -> &'static str {
@@ -94,6 +104,23 @@ impl Cue {
             Cue::IntervalFinished => "Interval finished",
             Cue::TaskDone => "Task complete",
         }
+    }
+
+    /// The ids to try, best first, from the freedesktop sound naming
+    /// specification: `alarm-clock-elapsed` is defined there as "a user
+    /// configured alarm elapsed", which is exactly what the end of an interval
+    /// is. The cue's own comes first, and for an interval with no
+    /// alarm sound anywhere, the completion chime — a short chime beats silence.
+    fn event_ids(self) -> &'static [&'static str] {
+        match self {
+            Cue::IntervalFinished => &["alarm-clock-elapsed", "complete"],
+            Cue::TaskDone => &["complete"],
+        }
+    }
+
+    #[cfg(test)]
+    fn event_id(self) -> &'static str {
+        self.event_ids()[0]
     }
 }
 
@@ -121,50 +148,51 @@ impl Candidate {
     }
 }
 
-/// The ways of playing `cue`, best first.
-///
-/// `canberra-gtk-play` leads because it is the only one that takes an event id
-/// and resolves it in the user's theme; the rest need to be handed a `file`,
-/// and are left out when the theme search found none. `pw-play` is told the
-/// stream is a notification so the audio server routes and ducks it as one.
-/// `gst-play-1.0` reads its keyboard controls from stdin unless told not to.
-/// `paplay` is not part of a default install any more and costs nothing to try
-/// last.
-fn candidates(cue: Cue, file: Option<&Path>) -> Vec<Candidate> {
-    let mut list = vec![Candidate::new(
+/// `canberra-gtk-play` asked for an event by id: the only player that resolves
+/// one in the user's theme, which is why it leads every stage.
+fn theme_candidate(event_id: &str, description: &str) -> Candidate {
+    Candidate::new(
         "canberra-gtk-play",
         [
             "-i",
-            cue.event_id(),
+            event_id,
             "-d",
-            cue.description(),
+            description,
             "--property=canberra.enable=1",
         ],
-    )];
-    if let Some(file) = file {
-        let file = file.as_os_str();
-        list.push(Candidate::new(
+    )
+}
+
+/// The players that have to be handed a file, best first. `pw-play` is told
+/// the stream is a notification so the audio server routes and ducks it as
+/// one. `gst-play-1.0` reads its keyboard controls from stdin unless told not
+/// to. `paplay` is not part of a default install any more and costs nothing to
+/// try last.
+fn file_candidates(file: &Path) -> Vec<Candidate> {
+    let file = file.as_os_str();
+    vec![
+        Candidate::new(
             "pw-play",
             [OsString::from("--media-role=Notification"), file.into()],
-        ));
-        list.push(Candidate::new(
+        ),
+        Candidate::new(
             "gst-play-1.0",
             [
                 OsString::from("--no-interactive"),
                 OsString::from("-q"),
                 file.into(),
             ],
-        ));
-        list.push(Candidate::new("paplay", [file]));
-    }
-    list
+        ),
+        Candidate::new("paplay", [file]),
+    ]
 }
 
 /// A theme name that can be used as one directory name and nothing else.
 ///
-/// The name comes out of a desktop setting, which anything running as the user
-/// can write. It is about to be joined onto a path, so one that could climb
-/// out of the sounds directory is treated as no theme at all.
+/// The name comes out of a desktop setting or a theme's index file, which
+/// anything running as the user can write. It is about to be joined onto a
+/// path, so one that could climb out of the sounds directory is treated as no
+/// theme at all.
 fn safe_theme_name(name: &str) -> Option<&str> {
     (!name.is_empty() && !name.contains('/') && !name.contains("..")).then_some(name)
 }
@@ -180,23 +208,65 @@ fn parse_theme_name(printed: &str) -> Option<String> {
     safe_theme_name(bare).map(str::to_string)
 }
 
+/// The themes a theme's `index.theme` says it inherits from.
+fn inherits(index: &str) -> Vec<String> {
+    index
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("Inherits"))
+        .filter_map(|rest| rest.trim_start().strip_prefix('='))
+        .flat_map(|names| names.split(','))
+        .filter_map(|name| safe_theme_name(name.trim()))
+        .map(str::to_string)
+        .collect()
+}
+
+/// The themes to search, in order: the user's, what it inherits from, what
+/// those inherit from, and the stock themes last.
+///
+/// `read_index` is asked for a theme's `index.theme` instead of the disk, so
+/// the order can be tested without one. Following `Inherits` is what the theme
+/// player does; searching only the named theme and the stock ones found
+/// nothing for a theme built on top of some third one.
+fn theme_chain(theme: Option<&str>, read_index: impl Fn(&str) -> Option<String>) -> Vec<String> {
+    let mut chain: Vec<String> = Vec::new();
+    let mut next: Vec<String> = theme
+        .and_then(safe_theme_name)
+        .map(str::to_string)
+        .into_iter()
+        .collect();
+    while let Some(name) = next.first().cloned() {
+        next.remove(0);
+        if chain.contains(&name) || chain.len() >= MAX_THEMES {
+            continue;
+        }
+        if let Some(index) = read_index(&name) {
+            next.extend(inherits(&index));
+        }
+        chain.push(name);
+    }
+    for stock in STOCK_THEMES {
+        if !chain.iter().any(|name| name == stock) {
+            chain.push(stock.to_string());
+        }
+    }
+    chain
+}
+
 /// The first file that exists for one event id.
 ///
-/// The user's own copy of the theme comes before the system's, as it does for
-/// libcanberra. Its files are looked for directly in the theme directory
+/// For each theme the user's own copy comes before the system's, as it does
+/// for libcanberra. Its files are looked for directly in the theme directory
 /// first: that is how GNOME lays out `__custom`, the theme it writes when an
-/// alert sound is picked in Settings. Then the theme proper, then Yaru because
-/// it is Ubuntu's default and may hold the id when the user's theme does not,
-/// then `freedesktop`, which every theme inherits from in the end.
+/// alert sound is picked in Settings.
 fn find_event_file(
     event_id: &str,
-    theme: Option<&str>,
+    themes: &[String],
     data_home: Option<&Path>,
     exists: &impl Fn(&Path) -> bool,
 ) -> Option<PathBuf> {
     let system = Path::new(SYSTEM_SOUNDS);
     let mut directories = Vec::new();
-    if let Some(theme) = theme {
+    for theme in themes {
         if let Some(data_home) = data_home {
             let own = data_home.join("sounds").join(theme);
             directories.push(own.clone());
@@ -204,8 +274,6 @@ fn find_event_file(
         }
         directories.push(system.join(theme).join("stereo"));
     }
-    directories.push(system.join("Yaru").join("stereo"));
-    directories.push(system.join("freedesktop").join("stereo"));
 
     directories
         .iter()
@@ -217,28 +285,6 @@ fn find_event_file(
         .find(|path| exists(path))
 }
 
-/// The file the file players should be given for `cue`, if the themes on this
-/// machine hold one.
-///
-/// `exists` is asked instead of the disk so the search order can be tested
-/// without one. Yaru does not ship `alarm-clock-elapsed`, and a machine
-/// without the `freedesktop` theme has it nowhere; the end of an interval then
-/// borrows `complete`, because a short chime beats silence.
-fn find_sound_file(
-    cue: Cue,
-    theme: Option<&str>,
-    data_home: Option<&Path>,
-    exists: impl Fn(&Path) -> bool,
-) -> Option<PathBuf> {
-    let theme = theme.and_then(safe_theme_name);
-    find_event_file(cue.event_id(), theme, data_home, &exists).or_else(|| match cue {
-        Cue::IntervalFinished => {
-            find_event_file(Cue::TaskDone.event_id(), theme, data_home, &exists)
-        }
-        Cue::TaskDone => None,
-    })
-}
-
 /// Where the user's own data lives: `XDG_DATA_HOME`, or `~/.local/share` when
 /// that is unset. The specification says a relative value is to be ignored.
 fn data_home_from(xdg_data_home: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
@@ -246,59 +292,6 @@ fn data_home_from(xdg_data_home: Option<OsString>, home: Option<OsString>) -> Op
     xdg_data_home
         .and_then(absolute)
         .or_else(|| Some(home.and_then(absolute)?.join(".local").join("share")))
-}
-
-/// Takes a child about to be spawned out of the AppImage it was launched from.
-///
-/// A Tauri AppImage points these variables at the libraries and GTK modules
-/// bundled inside it. A system GTK binary that inherits them loads the wrong
-/// libraries, or none, and dies before it has played anything; `gsettings`
-/// sent to the bundle's schemas cannot find the desktop's. Best effort: this
-/// is the list such an AppImage is known to export, not a guarantee that
-/// nothing else leaks through.
-fn leave_the_appimage(command: &mut Command, inside_appimage: bool) {
-    const BUNDLE_ONLY: [&str; 7] = [
-        "LD_LIBRARY_PATH",
-        "GTK_PATH",
-        "GTK_EXE_PREFIX",
-        "GTK_DATA_PREFIX",
-        "GDK_PIXBUF_MODULE_FILE",
-        "GIO_MODULE_DIR",
-        "GSETTINGS_SCHEMA_DIR",
-    ];
-    if inside_appimage {
-        for name in BUNDLE_ONLY {
-            command.env_remove(name);
-        }
-    }
-}
-
-/// What every child spawned here gets done to it first.
-fn for_the_system(command: &mut Command) {
-    leave_the_appimage(command, env::var_os("APPIMAGE").is_some());
-}
-
-/// Waits for `child` until `deadline` has passed, and reaps it either way.
-///
-/// `None` means it had to be killed, and so nothing is known about what it
-/// did. A `try_wait` that fails is treated the same: whatever became of the
-/// child, the one thing still owed is that it does not outlive this call as a
-/// zombie.
-fn wait_until(child: &mut Child, deadline: Duration, poll: Duration) -> Option<ExitStatus> {
-    let began = Instant::now();
-    loop {
-        if let Ok(Some(status)) = child.try_wait() {
-            return Some(status);
-        }
-        let left = deadline.saturating_sub(began.elapsed());
-        if left.is_zero() {
-            break;
-        }
-        thread::sleep(poll.min(left));
-    }
-    let _ = child.kill();
-    let _ = child.wait();
-    None
 }
 
 /// How a walk over the candidates ended. The index says which candidate.
@@ -340,7 +333,7 @@ fn walk(
         let Ok(mut child) = command.spawn() else {
             continue;
         };
-        match wait_until(&mut child, deadline, poll) {
+        match system::wait_until(&mut child, deadline, poll) {
             Some(status) if status.success() => return Walk::Played(index),
             Some(_) => {}
             None => return Walk::TimedOut(index),
@@ -349,62 +342,239 @@ fn walk(
     Walk::NoneWorked
 }
 
+/// How playing a cue ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Outcome {
+    Played,
+    /// A player had to be killed. The sound may or may not have been heard.
+    TimedOut,
+    NoneWorked,
+}
+
+/// Plays `cue` by the first route that works.
+///
+/// For each id in turn — the cue's own, then for an interval the chime it may
+/// borrow — the theme player is asked for the id, and only if that fails is
+/// `find_file` asked for a file to hand the file players. `find_file` is the
+/// expensive part and is not called at all on the usual path. A route that
+/// runs into its deadline ends the whole attempt, for the reason [`walk`]
+/// gives.
+fn play_by_stages(
+    cue: Cue,
+    mut find_file: impl FnMut(&str) -> Option<PathBuf>,
+    mut run: impl FnMut(&[Candidate]) -> Walk,
+) -> Outcome {
+    for event_id in cue.event_ids() {
+        let theme_player = [theme_candidate(event_id, cue.description())];
+        match run(&theme_player) {
+            Walk::Played(_) => return Outcome::Played,
+            Walk::TimedOut(_) => return Outcome::TimedOut,
+            Walk::NoneWorked => {}
+        }
+        let Some(file) = find_file(event_id) else {
+            continue;
+        };
+        match run(&file_candidates(&file)) {
+            Walk::Played(_) => return Outcome::Played,
+            Walk::TimedOut(_) => return Outcome::TimedOut,
+            Walk::NoneWorked => {}
+        }
+    }
+    Outcome::NoneWorked
+}
+
 /// The sound theme the desktop is set to, or `None` if that cannot be learned:
 /// no `gsettings`, no GNOME schema, a name that is not safe to use. The search
-/// then goes straight to the themes every machine has. Waited for with a
-/// deadline like any other child, because the "a sound is playing" mark is
-/// held while this runs and must not be held for ever.
+/// then goes straight to the themes every machine has.
 fn desktop_theme_name() -> Option<String> {
-    let mut command = Command::new("gsettings");
-    command
-        .args(["get", SCHEMA, KEY])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    for_the_system(&mut command);
-    let mut child = command.spawn().ok()?;
-    // A theme name is far smaller than a pipe's buffer, so the child can
-    // finish writing, and exit, before anything is read.
-    let status = wait_until(&mut child, GSETTINGS_DEADLINE, GSETTINGS_POLL)?;
-    if !status.success() {
-        return None;
-    }
-    let mut printed = String::new();
-    child.stdout.take()?.read_to_string(&mut printed).ok()?;
-    parse_theme_name(&printed)
+    let mut command = system::command("gsettings");
+    command.args(["get", SCHEMA, KEY]);
+    let answer = system::ask(command)?;
+    answer
+        .status
+        .success()
+        .then(|| parse_theme_name(&answer.stdout))?
 }
 
-/// Set while a sound is being played, process-wide.
-static PLAYING: AtomicBool = AtomicBool::new(false);
-
-/// Holds the "a sound is playing" mark, and gives it back when dropped — at
-/// the end of the playing thread, on any early way out of it, when the thread
-/// could not be started at all and the closure that owns this is thrown away,
-/// and during a panic's unwinding. A mark left set would silence Pomodoro
-/// until it was restarted.
-struct Playing(&'static AtomicBool);
-
-impl Playing {
-    /// Takes the mark, or returns `None` if somebody already holds it.
-    fn claim(mark: &'static AtomicBool) -> Option<Self> {
-        mark.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .ok()
-            .map(|_| Self(mark))
+/// Searches the themes on this machine for one event's file. The theme chain
+/// is worked out on the first call and kept for the second.
+fn file_finder() -> impl FnMut(&str) -> Option<PathBuf> {
+    let mut themes: Option<(Vec<String>, Option<PathBuf>)> = None;
+    move |event_id| {
+        let (themes, data_home) = themes.get_or_insert_with(|| {
+            let data_home = data_home_from(env::var_os("XDG_DATA_HOME"), env::var_os("HOME"));
+            let read_index = |theme: &str| {
+                data_home
+                    .iter()
+                    .map(|home| home.join("sounds"))
+                    .chain([PathBuf::from(SYSTEM_SOUNDS)])
+                    .find_map(|sounds| {
+                        fs::read_to_string(sounds.join(theme).join("index.theme")).ok()
+                    })
+            };
+            (
+                theme_chain(desktop_theme_name().as_deref(), read_index),
+                data_home.clone(),
+            )
+        });
+        find_event_file(event_id, themes, data_home.as_deref(), &|path: &Path| {
+            path.is_file()
+        })
     }
 }
 
-impl Drop for Playing {
+/// Plays `cue` now, on this thread, and says how it went.
+fn play_now(cue: Cue) -> Result<(), String> {
+    let outcome = play_by_stages(cue, file_finder(), |candidates| {
+        walk(
+            candidates,
+            PLAYER_DEADLINE,
+            PLAYER_POLL,
+            system::leave_the_appimage,
+        )
+    });
+    match outcome {
+        Outcome::Played => Ok(()),
+        Outcome::TimedOut => Err(
+            "The sound player did not finish and was stopped. The audio system may have no working output."
+                .to_string(),
+        ),
+        Outcome::NoneWorked => Err(
+            "No system sound player could play the sound. Pomodoro uses canberra-gtk-play, or pw-play, gst-play-1.0 or paplay with a sound theme installed."
+                .to_string(),
+        ),
+    }
+}
+
+/// Somebody waiting to hear how their request went.
+type Reply = mpsc::Sender<Result<(), String>>;
+
+/// A sound asked for, and who to tell.
+struct Request {
+    cue: Cue,
+    reply: Option<Reply>,
+}
+
+/// What is playing, and the one request allowed to wait behind it.
+#[derive(Default)]
+struct Slot {
+    playing: Option<Cue>,
+    waiting: Option<Request>,
+}
+
+/// What becomes of a new request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Admission {
+    /// Nothing is playing: play it.
+    Start,
+    /// It waits for the sound now playing and goes next.
+    Wait,
+    /// It is dropped.
+    Drop,
+}
+
+/// Decides what becomes of a request for `cue`.
+///
+/// The end of an interval waits behind a lesser sound rather than being lost
+/// to it. Everything else that arrives mid-sound is dropped — a second chime on
+/// top of the first helps nobody, and an alarm already playing or already
+/// waiting does not need another behind it.
+fn admit(playing: Option<Cue>, something_waiting: bool, cue: Cue) -> Admission {
+    match (playing, cue) {
+        (None, _) => Admission::Start,
+        (Some(Cue::TaskDone), Cue::IntervalFinished) if !something_waiting => Admission::Wait,
+        _ => Admission::Drop,
+    }
+}
+
+static SLOT: Mutex<Slot> = Mutex::new(Slot {
+    playing: None,
+    waiting: None,
+});
+
+/// Empties the slot when the playing thread ends by any route other than the
+/// ordinary one, which has already emptied it: a panic's unwinding, or a thread
+/// that could not be started and whose closure is thrown away. A slot left
+/// marked as playing would silence Pomodoro until it was restarted.
+struct Occupied(&'static Mutex<Slot>);
+
+impl Drop for Occupied {
     fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
+        let mut slot = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        slot.playing = None;
+        if let Some(Request {
+            reply: Some(reply), ..
+        }) = slot.waiting.take()
+        {
+            let _ = reply.send(Err("The sound could not be played.".to_string()));
+        }
+    }
+}
+
+fn request(
+    slot: &'static Mutex<Slot>,
+    cue: Cue,
+    reply: Option<Reply>,
+    play: fn(Cue) -> Result<(), String>,
+) {
+    let refused = |reply: Option<Reply>| {
+        if let Some(reply) = reply {
+            let _ = reply.send(Err(
+                "Another sound is playing. Try again in a moment.".to_string()
+            ));
+        }
+    };
+    {
+        let mut held = slot.lock().unwrap_or_else(PoisonError::into_inner);
+        match admit(held.playing, held.waiting.is_some(), cue) {
+            Admission::Start => held.playing = Some(cue),
+            Admission::Wait => {
+                held.waiting = Some(Request { cue, reply });
+                return;
+            }
+            Admission::Drop => {
+                drop(held);
+                refused(reply);
+                return;
+            }
+        }
+    }
+
+    let occupied = Occupied(slot);
+    let spawned = thread::Builder::new()
+        .name("sound-player".to_string())
+        .spawn(move || {
+            let occupied = occupied;
+            let mut current = Request { cue, reply };
+            loop {
+                let result = play(current.cue);
+                if let Err(error) = &result {
+                    eprintln!("could not play a sound: {error}");
+                }
+                if let Some(reply) = current.reply.take() {
+                    let _ = reply.send(result);
+                }
+                let mut held = occupied.0.lock().unwrap_or_else(PoisonError::into_inner);
+                match held.waiting.take() {
+                    Some(next) => {
+                        held.playing = Some(next.cue);
+                        current = next;
+                    }
+                    None => {
+                        held.playing = None;
+                        break;
+                    }
+                }
+            }
+        });
+    if let Err(error) = spawned {
+        // The closure, and the `Occupied` inside it, has been dropped: the slot
+        // is free again and anything that was waiting has been told.
+        eprintln!("could not play a sound: {error}");
     }
 }
 
 /// Plays the theme's sound for `cue`, and returns at once.
-///
-/// A request made while another sound is still playing is dropped, not queued.
-/// Two alarms on top of each other are worse than one, and the case that
-/// really happens — the click that completes a task is also the first thing
-/// to notice an interval has ended — wants the interval's sound alone.
 ///
 /// Does nothing in a test build, so that no test, present or future, can make
 /// a noise by reaching this through the code it is really about. The parts
@@ -413,33 +583,22 @@ pub fn play(cue: Cue) {
     if cfg!(test) {
         return;
     }
-    let Some(playing) = Playing::claim(&PLAYING) else {
-        return;
-    };
-    let spawned = thread::Builder::new()
-        .name("sound-player".to_string())
-        .spawn(move || {
-            let _playing = playing;
-            let data_home = data_home_from(env::var_os("XDG_DATA_HOME"), env::var_os("HOME"));
-            let file = find_sound_file(
-                cue,
-                desktop_theme_name().as_deref(),
-                data_home.as_deref(),
-                |path| path.is_file(),
-            );
-            let outcome = walk(
-                &candidates(cue, file.as_deref()),
-                PLAYER_DEADLINE,
-                PLAYER_POLL,
-                for_the_system,
-            );
-            if outcome == Walk::NoneWorked {
-                eprintln!("could not play a sound: no system sound player worked");
-            }
-        });
-    if let Err(error) = spawned {
-        eprintln!("could not play a sound: {error}");
+    request(&SLOT, cue, None, play_now);
+}
+
+/// Plays the theme's sound for `cue` and waits to say how it went, for the
+/// "Test sound" button: the one caller whose whole question is whether anything
+/// will be heard. Blocks until the sound has finished, so never call it from
+/// the main thread or the timer's.
+pub fn play_and_report(cue: Cue) -> Result<(), String> {
+    if cfg!(test) {
+        return Ok(());
     }
+    let (reply, outcome) = mpsc::channel();
+    request(&SLOT, cue, Some(reply), play_now);
+    outcome
+        .recv()
+        .unwrap_or_else(|_| Err("The sound could not be played.".to_string()))
 }
 
 /// Nothing in here makes a sound. The walk is exercised with `true`, `false`,
@@ -455,11 +614,34 @@ mod tests {
         fs, io,
         os::unix::fs::PermissionsExt,
         sync::atomic::{AtomicU32, Ordering},
+        time::Instant,
     };
 
     const NOWHERE: &str = "pomodoro-no-such-player";
 
     fn untouched(_: &mut Command) {}
+
+    /// Every way of playing one cue's own id, in the order they are tried.
+    fn candidates(cue: Cue, file: Option<&Path>) -> Vec<Candidate> {
+        let mut list = vec![theme_candidate(cue.event_id(), cue.description())];
+        list.extend(file.into_iter().flat_map(file_candidates));
+        list
+    }
+
+    /// The file for a cue's own id, in a theme that inherits from nothing.
+    fn find_sound_file(
+        cue: Cue,
+        theme: Option<&str>,
+        data_home: Option<&Path>,
+        exists: impl Fn(&Path) -> bool,
+    ) -> Option<PathBuf> {
+        find_event_file(
+            cue.event_id(),
+            &theme_chain(theme, |_| None),
+            data_home,
+            &exists,
+        )
+    }
 
     fn stand_in(program: &'static str, args: &[&str]) -> Candidate {
         Candidate::new(program, args.iter().copied())
@@ -614,27 +796,6 @@ mod tests {
     }
 
     #[test]
-    fn an_interval_with_no_alarm_sound_anywhere_borrows_the_completion_chime() {
-        let alarm = "/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga";
-        let chime = "/usr/share/sounds/Yaru/stereo/complete.oga";
-        // The alarm wins wherever it is, even behind a chime in a directory
-        // that is searched earlier.
-        assert_eq!(
-            find_sound_file(Cue::IntervalFinished, None, None, only(&[alarm, chime])),
-            Some(PathBuf::from(alarm))
-        );
-        assert_eq!(
-            find_sound_file(Cue::IntervalFinished, None, None, only(&[chime])),
-            Some(PathBuf::from(chime))
-        );
-        // It does not work the other way round.
-        assert_eq!(
-            find_sound_file(Cue::TaskDone, None, None, only(&[alarm])),
-            None
-        );
-    }
-
-    #[test]
     fn a_theme_name_that_could_leave_the_sounds_directory_is_not_used() {
         let home = Path::new("/home/someone/.local/share");
         for name in ["../../../etc", "..", "a/b", "/etc", "Yaru/../..", ""] {
@@ -645,11 +806,15 @@ mod tests {
             });
             assert_eq!(found, None);
             let asked = asked.into_inner();
-            assert_eq!(asked.len(), 2 * EXTENSIONS.len(), "{name:?}: {asked:?}");
+            // Only the stock themes are looked for — in the user's own copy of
+            // each and in the system's — and the bad name appears nowhere.
+            assert_eq!(asked.len(), 2 * 3 * EXTENSIONS.len(), "{name:?}: {asked:?}");
             assert!(
                 asked.iter().all(|path| {
-                    path.starts_with("/usr/share/sounds/Yaru/stereo")
-                        || path.starts_with("/usr/share/sounds/freedesktop/stereo")
+                    ["Yaru", "freedesktop"].iter().any(|stock| {
+                        path.starts_with(home.join("sounds").join(stock))
+                            || path.starts_with(Path::new(SYSTEM_SOUNDS).join(stock))
+                    })
                 }),
                 "{name:?} was looked for: {asked:?}"
             );
@@ -692,35 +857,6 @@ mod tests {
         );
         assert_eq!(data_home_from(None, None), None);
         assert_eq!(data_home_from(None, os("somewhere")), None);
-    }
-
-    #[test]
-    fn a_child_of_an_appimage_is_not_handed_the_bundles_libraries() {
-        let mut command = Command::new(NOWHERE);
-        leave_the_appimage(&mut command, true);
-        let removed: HashSet<String> = command
-            .get_envs()
-            .filter(|(_, value)| value.is_none())
-            .map(|(name, _)| name.to_string_lossy().into_owned())
-            .collect();
-        let expected: HashSet<String> = [
-            "LD_LIBRARY_PATH",
-            "GTK_PATH",
-            "GTK_EXE_PREFIX",
-            "GTK_DATA_PREFIX",
-            "GDK_PIXBUF_MODULE_FILE",
-            "GIO_MODULE_DIR",
-            "GSETTINGS_SCHEMA_DIR",
-        ]
-        .into_iter()
-        .map(str::to_string)
-        .collect();
-        assert_eq!(removed, expected);
-
-        // Outside one the environment is the user's own and is left alone.
-        let mut command = Command::new(NOWHERE);
-        leave_the_appimage(&mut command, false);
-        assert_eq!(command.get_envs().count(), 0);
     }
 
     #[test]
@@ -848,45 +984,258 @@ mod tests {
     }
 
     #[test]
-    fn a_second_sound_is_refused_while_the_first_is_playing() {
-        static MARK: AtomicBool = AtomicBool::new(false);
+    fn a_theme_is_searched_along_what_it_inherits_from_and_the_stock_themes_last() {
+        let index = |theme: &str| match theme {
+            "Mine" => {
+                Some("[Sound Theme]\nName=Mine\nInherits=Ocean, Deep\nDirectories=.\n".to_string())
+            }
+            "Ocean" => Some("Inherits = Yaru".to_string()),
+            // A loop, and a name that would climb out of the sounds directory.
+            "Deep" => Some("Inherits=Mine,../../etc".to_string()),
+            _ => None,
+        };
+        assert_eq!(
+            theme_chain(Some("Mine"), index),
+            ["Mine", "Ocean", "Deep", "Yaru", "freedesktop"]
+        );
+        assert_eq!(theme_chain(None, |_| None), ["Yaru", "freedesktop"]);
+        assert_eq!(theme_chain(Some("../x"), |_| None), ["Yaru", "freedesktop"]);
 
-        let first = Playing::claim(&MARK).expect("nothing is playing yet");
-        assert!(Playing::claim(&MARK).is_none());
-        assert!(Playing::claim(&MARK).is_none(), "a refusal changes nothing");
-        drop(first);
-        let again = Playing::claim(&MARK).expect("the first has finished");
-        drop(again);
-        assert!(!MARK.load(Ordering::Acquire));
+        // A file only a grandparent theme holds is found. Searching just the
+        // named theme and the stock ones missed it.
+        let deep = "/usr/share/sounds/Deep/stereo/complete.oga";
+        assert_eq!(
+            find_event_file(
+                "complete",
+                &theme_chain(Some("Mine"), index),
+                None,
+                &only(&[deep])
+            ),
+            Some(PathBuf::from(deep))
+        );
+    }
+
+    /// Runs the stages against a script of answers, recording what was asked.
+    fn staged(cue: Cue, files: &[(&str, &str)], answers: &[Walk]) -> (Outcome, Vec<String>) {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let mut answers = answers.iter();
+        let outcome = play_by_stages(
+            cue,
+            |event_id| {
+                asked.borrow_mut().push(format!("find {event_id}"));
+                files
+                    .iter()
+                    .find(|(id, _)| *id == event_id)
+                    .map(|(_, path)| PathBuf::from(path))
+            },
+            |candidates| {
+                asked.borrow_mut().push(format!(
+                    "run {} {}",
+                    candidates[0].program,
+                    candidates[0].args.last().unwrap().to_string_lossy()
+                ));
+                *answers.next().expect("more stages were run than expected")
+            },
+        );
+        (outcome, asked.into_inner())
     }
 
     #[test]
-    fn the_mark_is_given_back_when_the_playing_thread_panics_or_never_starts() {
-        static MARK: AtomicBool = AtomicBool::new(false);
+    fn the_theme_is_not_searched_by_hand_when_the_theme_player_works() {
+        // The search is a gsettings call and a walk over the disk. Doing it
+        // first delayed every alarm for a result the theme player never uses.
+        let (outcome, asked) = staged(Cue::IntervalFinished, &[], &[Walk::Played(0)]);
+        assert_eq!(outcome, Outcome::Played);
+        assert_eq!(
+            asked,
+            ["run canberra-gtk-play --property=canberra.enable=1"]
+        );
+    }
 
-        let playing = Playing::claim(&MARK).unwrap();
-        let outcome = thread::spawn(move || {
-            let _playing = playing;
+    #[test]
+    fn an_interval_with_no_alarm_sound_asks_the_theme_player_for_the_chime_too() {
+        // Yaru ships no alarm sound. Without the freedesktop theme the theme
+        // player refuses the alarm, no file exists for the file players, and
+        // the interval used to end in silence though the theme player could
+        // have played the chime.
+        let (outcome, asked) = staged(
+            Cue::IntervalFinished,
+            &[],
+            &[Walk::NoneWorked, Walk::Played(0)],
+        );
+        assert_eq!(outcome, Outcome::Played);
+        assert_eq!(
+            asked,
+            [
+                "run canberra-gtk-play --property=canberra.enable=1",
+                "find alarm-clock-elapsed",
+                "run canberra-gtk-play --property=canberra.enable=1",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_alarm_by_any_route_comes_before_the_chime_by_any_route() {
+        let alarm = "/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga";
+        let chime = "/usr/share/sounds/Yaru/stereo/complete.oga";
+        let (outcome, asked) = staged(
+            Cue::IntervalFinished,
+            &[("alarm-clock-elapsed", alarm), ("complete", chime)],
+            &[Walk::NoneWorked; 4],
+        );
+        assert_eq!(outcome, Outcome::NoneWorked);
+        assert_eq!(
+            asked,
+            [
+                "run canberra-gtk-play --property=canberra.enable=1".to_string(),
+                "find alarm-clock-elapsed".to_string(),
+                format!("run pw-play {alarm}"),
+                "run canberra-gtk-play --property=canberra.enable=1".to_string(),
+                "find complete".to_string(),
+                format!("run pw-play {chime}"),
+            ]
+        );
+
+        // A finished task has no second sound to borrow.
+        let (outcome, asked) = staged(Cue::TaskDone, &[], &[Walk::NoneWorked]);
+        assert_eq!(outcome, Outcome::NoneWorked);
+        assert_eq!(
+            asked.len(),
+            2,
+            "its own id by both routes, and nothing more"
+        );
+    }
+
+    #[test]
+    fn a_route_that_hangs_ends_the_whole_attempt() {
+        let (outcome, asked) = staged(Cue::IntervalFinished, &[], &[Walk::TimedOut(0)]);
+        assert_eq!(outcome, Outcome::TimedOut);
+        assert_eq!(asked.len(), 1, "the sound may already have been heard");
+    }
+
+    #[test]
+    fn the_alarm_waits_behind_a_lesser_sound_and_everything_else_mid_sound_is_dropped() {
+        use Admission::{Drop, Start, Wait};
+        use Cue::{IntervalFinished as Alarm, TaskDone as Chime};
+
+        assert_eq!(admit(None, false, Alarm), Start);
+        assert_eq!(admit(None, false, Chime), Start);
+        // Ticking a task off a second before the interval ends used to cost
+        // the alarm; with notifications off the interval then ended unmarked.
+        assert_eq!(admit(Some(Chime), false, Alarm), Wait);
+        assert_eq!(
+            admit(Some(Chime), true, Alarm),
+            Drop,
+            "one alarm waiting is enough"
+        );
+        assert_eq!(admit(Some(Alarm), false, Alarm), Drop);
+        assert_eq!(admit(Some(Alarm), false, Chime), Drop);
+        assert_eq!(admit(Some(Chime), false, Chime), Drop);
+    }
+
+    /// What the stand-in `play` functions below were asked to play.
+    static PLAYED: Mutex<Vec<Cue>> = Mutex::new(Vec::new());
+
+    #[test]
+    fn an_alarm_asked_for_mid_chime_is_played_next_and_its_asker_is_told() {
+        static SLOT: Mutex<Slot> = Mutex::new(Slot {
+            playing: None,
+            waiting: None,
+        });
+        fn slow(cue: Cue) -> Result<(), String> {
+            PLAYED.lock().unwrap().push(cue);
+            thread::sleep(Duration::from_millis(150));
+            Ok(())
+        }
+
+        request(&SLOT, Cue::TaskDone, None, slow);
+        let (reply, outcome) = mpsc::channel();
+        request(&SLOT, Cue::IntervalFinished, Some(reply), slow);
+        // A chime arriving now is dropped, and says so at once.
+        let (dropped, refusal) = mpsc::channel();
+        request(&SLOT, Cue::TaskDone, Some(dropped), slow);
+        assert!(refusal
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .is_err());
+
+        assert_eq!(
+            outcome.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Ok(())
+        );
+        assert_eq!(
+            *PLAYED.lock().unwrap(),
+            [Cue::TaskDone, Cue::IntervalFinished]
+        );
+
+        // And the slot is free again afterwards.
+        for _ in 0..50 {
+            if SLOT.lock().unwrap().playing.is_none() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(SLOT.lock().unwrap().playing.is_none());
+    }
+
+    #[test]
+    fn a_sound_that_fails_is_reported_to_whoever_asked() {
+        static SLOT: Mutex<Slot> = Mutex::new(Slot {
+            playing: None,
+            waiting: None,
+        });
+        fn broken(_: Cue) -> Result<(), String> {
+            Err("no player".to_string())
+        }
+        let (reply, outcome) = mpsc::channel();
+        request(&SLOT, Cue::IntervalFinished, Some(reply), broken);
+        assert_eq!(
+            outcome.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Err("no player".to_string())
+        );
+    }
+
+    #[test]
+    fn the_slot_is_given_back_when_the_playing_thread_panics_or_never_starts() {
+        static SLOT: Mutex<Slot> = Mutex::new(Slot {
+            playing: None,
+            waiting: None,
+        });
+        let (reply, outcome) = mpsc::channel();
+        {
+            let mut slot = SLOT.lock().unwrap();
+            slot.playing = Some(Cue::TaskDone);
+            slot.waiting = Some(Request {
+                cue: Cue::IntervalFinished,
+                reply: Some(reply),
+            });
+        }
+        let occupied = Occupied(&SLOT);
+        let unwound = thread::spawn(move || {
+            let _occupied = occupied;
             panic!("a panic on the playing thread, on purpose");
         })
         .join();
-        assert!(outcome.is_err());
-        assert!(Playing::claim(&MARK).is_some(), "the mark was left set");
+        assert!(unwound.is_err());
 
-        // A thread that could not be started drops the closure it was given.
-        let playing = Playing::claim(&MARK).unwrap();
-        let never_run = move || {
-            let _playing = playing;
-        };
-        drop(never_run);
-        assert!(Playing::claim(&MARK).is_some());
+        let slot = SLOT.lock().unwrap_or_else(PoisonError::into_inner);
+        assert!(
+            slot.playing.is_none(),
+            "the slot was left marked as playing"
+        );
+        assert!(slot.waiting.is_none());
+        assert!(
+            outcome.recv().unwrap().is_err(),
+            "whoever was waiting is told"
+        );
     }
 
     #[test]
-    fn play_itself_does_nothing_under_test() {
+    fn playing_does_nothing_under_test() {
         play(Cue::IntervalFinished);
         play(Cue::TaskDone);
-        assert!(!PLAYING.load(Ordering::Acquire));
+        assert_eq!(play_and_report(Cue::IntervalFinished), Ok(()));
+        assert!(SLOT.lock().unwrap().playing.is_none());
     }
 
     /// A directory of logging stand-ins, to be the whole of a child's `PATH`.

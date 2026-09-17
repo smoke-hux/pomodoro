@@ -21,7 +21,7 @@ function renderDialog(overrides: Partial<Parameters<typeof SettingsDialog>[0]> =
     notificationCount: 0,
     onClose: vi.fn(),
     onSave: vi.fn(async () => true),
-    onPreviewSound: vi.fn(),
+    onPreviewSound: vi.fn(async () => true),
     onClearHistory: vi.fn(async () => {}),
     onClearNotifications: vi.fn(async () => {}),
     ...overrides,
@@ -248,14 +248,22 @@ describe("keyboard", () => {
 });
 
 describe("sound", () => {
-  it("can be heard before it is relied on, without saving or closing anything", () => {
-    const onPreviewSound = vi.fn();
+  it("can be heard before it is relied on, without saving or closing anything", async () => {
+    let finished: (played: boolean) => void = () => {};
+    const onPreviewSound = vi.fn(() => new Promise<boolean>((resolve) => (finished = resolve)));
     const onSave = vi.fn<(next: Settings) => Promise<boolean>>(async () => true);
     const onClose = vi.fn();
     renderDialog({ onPreviewSound, onSave, onClose });
 
     fireEvent.click(screen.getByRole("button", { name: "Test sound" }));
     expect(onPreviewSound).toHaveBeenCalledTimes(1);
+    // The backend answers only once the sound has played, so meanwhile the
+    // button says so and cannot start a second one.
+    const playing = screen.getByRole("button", { name: "Playing…" }) as HTMLButtonElement;
+    expect(playing.disabled).toBe(true);
+
+    finished(true);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Test sound" })).toBeTruthy());
     // A plain button, not a submit: trying the sound must not save the draft.
     expect(onSave).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();

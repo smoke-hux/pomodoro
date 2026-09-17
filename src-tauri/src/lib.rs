@@ -3,6 +3,7 @@ mod notifications;
 mod quiet;
 mod sound;
 mod storage;
+mod system;
 
 use std::{
     sync::{
@@ -827,24 +828,50 @@ fn toggle_task(id: String, state: State<'_, RuntimeState>, app: AppHandle) -> Re
         toggled = Some((alert, title));
         Ok(())
     });
-    if let (Ok(()), Some((alert, title))) = (&result, toggled) {
+    // `toggled` is set once the task has been marked done in memory, which is
+    // what the window then shows — whether or not the save that followed
+    // worked. The alert used to wait on the whole result, so a full disk meant
+    // a task ticked off in silence while the finished interval in the same
+    // situation was announced. Memory is the truth for the running session,
+    // here as in `broadcast`.
+    if let Some((alert, title)) = toggled {
         // This very call may also have been the first to notice that an
         // interval had run out, in which case `mutate` has already started the
-        // interval's sound. That one wins: a request made while a sound is
-        // playing is dropped, so the two never sound over each other.
+        // interval's sound. That one wins: a chime asked for while the alarm
+        // is playing is dropped, so the two never sound over each other.
         if alert.sound {
             sound::play(Cue::TaskDone);
         }
         if alert.notify {
+            // The title goes in the summary, which the notification
+            // specification keeps as plain text. Servers that advertise
+            // body-markup read the body as markup, and a task called
+            // "Fix a<b" came out mangled on the ones that do not repair it.
             let _ = app
                 .notification()
                 .builder()
-                .title("Task complete")
-                .body(title)
+                .title(task_complete_summary(&title))
                 .show();
         }
     }
     result
+}
+
+/// The one line a "task complete" notification carries: the task's title,
+/// cut short if it would not fit a banner, and never empty.
+fn task_complete_summary(title: &str) -> String {
+    const MOST: usize = 80;
+    let title = title.trim();
+    let shown: String = if title.chars().count() > MOST {
+        format!("{}…", title.chars().take(MOST - 1).collect::<String>())
+    } else {
+        title.to_string()
+    };
+    if shown.is_empty() {
+        "Task complete".to_string()
+    } else {
+        format!("Task complete: {shown}")
+    }
 }
 
 /// Plays the interval sound so it can be heard from Settings before relying on
@@ -852,10 +879,14 @@ fn toggle_task(id: String, state: State<'_, RuntimeState>, app: AppHandle) -> Re
 /// installed. Deliberately not behind the Sound setting — the button is how
 /// one decides about that setting — and it changes, saves and publishes
 /// nothing.
-#[tauri::command]
+///
+/// It answers only once the sound has played, or failed to, so the button can
+/// say "no": the whole point of pressing it is to learn whether anything will
+/// be heard. That wait is why the command is async — it runs off the main
+/// thread — and it is at most the sound's length plus the player's deadline.
+#[tauri::command(async)]
 fn preview_sound() -> Result<(), String> {
-    sound::play(Cue::IntervalFinished);
-    Ok(())
+    sound::play_and_report(Cue::IntervalFinished)
 }
 
 #[tauri::command]
@@ -1567,6 +1598,19 @@ mod runtime {
         assert_eq!(again.result, Ok(()));
         assert!(again.snapshot.is_none());
         let _ = fs::remove_file(blocker);
+    }
+
+    #[test]
+    fn a_task_complete_notification_names_the_task_in_its_summary() {
+        assert_eq!(
+            task_complete_summary("  Fix a<b && c>d  "),
+            "Task complete: Fix a<b && c>d"
+        );
+        assert_eq!(task_complete_summary("   "), "Task complete");
+        let long = "x".repeat(200);
+        let summary = task_complete_summary(&long);
+        assert!(summary.ends_with('…'));
+        assert!(summary.chars().count() <= "Task complete: ".len() + 80);
     }
 
     #[test]
