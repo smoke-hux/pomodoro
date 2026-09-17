@@ -2,8 +2,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Clock3, Inbox, Menu, Monitor, Moon, Settings as SettingsIcon, Sun } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./lib/api";
-import { getCompletedFocusCount, getCompletedFocusMinutes, getLocalDateKey } from "./lib/metrics";
-import { applyTheme, nextTheme, resolveTheme, useSystemDark } from "./lib/theme";
+import {
+  getCompletedFocusCount,
+  getCompletedFocusDisplayMinutes,
+  getDayBoundsForKey,
+  isWithinDay,
+} from "./lib/metrics";
+import {
+  applyTheme,
+  nextTheme,
+  readRememberedTheme,
+  resolveTheme,
+  useSystemDark,
+} from "./lib/theme";
 import { useCountdown } from "./lib/useCountdown";
 import { useDayKey } from "./lib/useDayKey";
 import { closeRowMenus, useRowMenus } from "./lib/useRowMenus";
@@ -104,6 +115,8 @@ function browserPreview(): AppSnapshot {
     captureStatus: { state: "active", detail: "" },
     settings: {
       ...defaultSnapshot.settings,
+      // The preview has no backend, so the remembered theme is its setting.
+      theme: readRememberedTheme(),
       notificationFilter: {
         ...defaultSnapshot.settings.notificationFilter,
         enabled: true,
@@ -165,12 +178,14 @@ export default function App() {
   const [addRequest, setAddRequest] = useState(0);
   const [notice, setNotice] = useState("");
   const [ready, setReady] = useState(!inTauri);
+  const [recoveryDismissed, setRecoveryDismissed] = useState(false);
   // Whether `snapshot` holds real settings yet, rather than the defaults.
   const [settingsLoaded, setSettingsLoaded] = useState(!inTauri);
   const noticeTimer = useRef<number | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const knownSessionIds = useRef(new Set<string>());
   const hasSessionBaseline = useRef(!inTauri);
+  const openedAt = useRef(Date.now());
 
   // The countdown lives here, not in the snapshot. The backend sends a
   // deadline and this window counts down to it locally; the snapshot only
@@ -188,12 +203,11 @@ export default function App() {
   // Changes at midnight, so "today" rolls over in a window left open overnight.
   const dayKey = useDayKey();
   const todaySummary = useMemo(() => {
-    const today = snapshot.sessions.filter(
-      (session) => getLocalDateKey(session.startedAt) === dayKey,
-    );
+    const day = getDayBoundsForKey(dayKey);
+    const today = snapshot.sessions.filter((session) => isWithinDay(session.startedAt, day));
     return {
       count: getCompletedFocusCount(today),
-      minutes: Math.round(getCompletedFocusMinutes(today)),
+      minutes: getCompletedFocusDisplayMinutes(today),
     };
   }, [snapshot.sessions, dayKey]);
 
@@ -272,16 +286,16 @@ export default function App() {
     const unlisten = listen<AppSnapshot>("state-changed", (event) => {
       if (cancelled) return;
       let hasNewCompletion = false;
-      // If the initial read failed, the first broadcast is the baseline: every
-      // session in it is history, not something that just completed. Without
-      // this the baseline was never set on that path and the chime stayed
-      // silent for the life of the window.
+      // If the initial read failed, the first broadcast is the baseline, and
+      // what it holds is history — except a session that ended after this
+      // window opened, which is the very completion the broadcast announces.
       const isBaseline = !hasSessionBaseline.current;
       hasSessionBaseline.current = true;
       for (const session of event.payload.sessions) {
         if (knownSessionIds.current.has(session.id)) continue;
         knownSessionIds.current.add(session.id);
-        if (!isBaseline && session.outcome === "completed") {
+        const isNew = !isBaseline || session.endedAt >= openedAt.current;
+        if (isNew && session.outcome === "completed") {
           hasNewCompletion = true;
         }
       }
@@ -519,7 +533,8 @@ export default function App() {
     toggleTimer,
   ]);
 
-  const shellClass = `app-shell status-${timer.status} phase-${timer.phase}`;
+  const showRecovery = snapshot.recoveredStore !== null && !recoveryDismissed;
+  const shellClass = `app-shell status-${timer.status} phase-${timer.phase}${showRecovery ? " has-banner" : ""}`;
   const ThemeIcon = themeIcons[theme];
   const themeTitle =
     theme === "system"
@@ -584,6 +599,20 @@ export default function App() {
           <SettingsIcon aria-hidden="true" size={18} />
         </button>
       </header>
+
+      {showRecovery && (
+        <div className="store-banner" role="alert">
+          <p>
+            <strong>Pomodoro could not read its saved data and has started fresh.</strong>{" "}
+            {snapshot.recoveredStore
+              ? `Nothing was deleted: the old file is kept as ${snapshot.recoveredStore}, next to pomodoro.json in the app’s data folder.`
+              : "The old file could not be set aside, so it will be replaced the next time anything is saved. Quit from the tray now if you want to keep it."}
+          </p>
+          <button className="text-button" type="button" onClick={() => setRecoveryDismissed(true)}>
+            Dismiss
+          </button>
+        </div>
+      )}
 
       <div className="workspace">
         <div className={`sidebar-wrap ${sidebarOpen ? "open" : ""}`}>

@@ -61,12 +61,11 @@ function position(menu: HTMLDetailsElement) {
   menu.dataset.placed = "";
 }
 
-/** Closes every open row menu. For when something modal takes over the window. */
-export function closeRowMenus() {
-  closeAll();
-}
-
-function closeAll(except?: Node | null) {
+/**
+ * Closes every open row menu, or every one but the menu `except` is inside.
+ * Exported for when something modal takes over the window.
+ */
+export function closeRowMenus(except?: Node | null) {
   for (const menu of document.querySelectorAll<HTMLDetailsElement>(`${MENU_SELECTOR}[open]`)) {
     if (!except || !menu.contains(except)) menu.open = false;
   }
@@ -142,13 +141,13 @@ export function useRowMenus() {
       }
       // A menu opened from the keyboard arrives with no pointer press, so the
       // one before it has to be closed here as well.
-      closeAll(menu);
+      closeRowMenus(menu);
       position(menu);
       watch(menu);
     };
     const onPointerDown = (event: PointerEvent) =>
-      closeAll(event.target instanceof Node ? event.target : null);
-    const onMove = () => closeAll();
+      closeRowMenus(event.target instanceof Node ? event.target : null);
+    const onMove = () => closeRowMenus();
 
     document.addEventListener("toggle", onToggle, true);
     document.addEventListener("pointerdown", onPointerDown);

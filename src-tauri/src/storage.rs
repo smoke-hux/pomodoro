@@ -61,6 +61,46 @@ impl Store {
             .map_err(|error| format!("could not parse {}: {error}", self.path.display()))
     }
 
+    /// Loads the store, and if it exists but cannot be read, moves it aside
+    /// before anything can be saved over it.
+    ///
+    /// Starting from defaults after a failed load used to be silent, and the
+    /// first save — any click at all — then replaced the unreadable file with
+    /// those defaults. A file that will not parse today may still be
+    /// recoverable by hand, so it is kept, under a name that says when it was
+    /// set aside, and the returned name is shown to the user.
+    pub fn load_or_set_aside(&self, now_ms: i64) -> (AppData, Option<String>) {
+        let error = match self.load() {
+            Ok(data) => return (data, None),
+            Err(error) => error,
+        };
+        eprintln!("{error}; starting with an empty local data set");
+
+        let aside = self
+            .path
+            .with_file_name(format!("pomodoro.unreadable-{now_ms}.json"));
+        // Copying is the fallback for a file that can be read but not moved.
+        let kept = fs::rename(&self.path, &aside).is_ok() || fs::copy(&self.path, &aside).is_ok();
+        if kept {
+            // It may hold captured notification text, like the store itself.
+            restrict(&aside, FILE_MODE);
+        }
+        let name = if kept {
+            aside
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        } else {
+            eprintln!("could not set the unreadable store aside");
+            String::new()
+        };
+        let data = AppData {
+            recovered_store: Some(name.clone()),
+            ..AppData::default()
+        };
+        (data, Some(name))
+    }
+
     pub fn save(&self, data: &AppData) -> Result<(), String> {
         let parent = self
             .path
@@ -113,6 +153,48 @@ mod tests {
         let loaded = store.load().expect("saved data should load");
         assert_eq!(loaded.tasks.len(), 1);
         assert_eq!(loaded.tasks[0].title, "Round trip");
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn an_unreadable_store_is_set_aside_rather_than_saved_over() {
+        let directory = std::env::temp_dir().join(format!(
+            "pomodoro-aside-test-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_millis()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let store = Store::new(&directory);
+        fs::write(directory.join("pomodoro.json"), b"{ \"tasks\": [ truncated").unwrap();
+
+        let (data, aside) = store.load_or_set_aside(1_234);
+        assert!(data.tasks.is_empty());
+        assert_eq!(aside.as_deref(), Some("pomodoro.unreadable-1234.json"));
+        assert_eq!(data.recovered_store, aside);
+
+        // The first save after that is what used to destroy the old file.
+        store.save(&data).expect("save should succeed");
+        let kept = fs::read(directory.join("pomodoro.unreadable-1234.json")).unwrap();
+        assert_eq!(kept, b"{ \"tasks\": [ truncated");
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn a_missing_or_readable_store_is_not_a_recovery() {
+        let directory = std::env::temp_dir().join(format!(
+            "pomodoro-fresh-test-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_millis()
+        ));
+        let store = Store::new(&directory);
+        let (data, aside) = store.load_or_set_aside(1);
+        assert_eq!(aside, None);
+        assert_eq!(data.recovered_store, None);
+
+        store.save(&data).expect("save should succeed");
+        assert_eq!(store.load_or_set_aside(2).1, None);
 
         let _ = fs::remove_dir_all(directory);
     }

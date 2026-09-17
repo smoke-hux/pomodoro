@@ -437,6 +437,12 @@ pub struct AppData {
     /// whether one is running now.
     #[serde(skip_deserializing)]
     pub capture_status: CaptureStatus,
+    /// Set for this run only, when the store on disk could not be read and was
+    /// set aside: the name it was kept under, or empty if it could not be
+    /// kept. Never read back, so the notice does not outlive the launch that
+    /// caused it.
+    #[serde(skip_deserializing)]
+    pub recovered_store: Option<String>,
 }
 
 impl Default for AppData {
@@ -452,6 +458,7 @@ impl Default for AppData {
             notifications: Vec::new(),
             banner_restore: None,
             capture_status: CaptureStatus::off(),
+            recovered_store: None,
         }
     }
 }
@@ -481,6 +488,7 @@ impl AppData {
             notifications: self.notifications.clone(),
             banner_restore: self.banner_restore,
             capture_status: self.capture_status.clone(),
+            recovered_store: self.recovered_store.clone(),
         }
     }
 

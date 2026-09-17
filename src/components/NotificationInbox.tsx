@@ -12,7 +12,7 @@ import {
   Undo2,
 } from "lucide-react";
 import type { CaptureStatus, DesktopNotification } from "../types";
-import { formatRelativeTime } from "../lib/metrics";
+import { formatRelativeTime, toIsoTime as isoTime } from "../lib/metrics";
 
 interface NotificationInboxProps {
   notifications: DesktopNotification[];
@@ -46,10 +46,6 @@ function absoluteTime(timestamp: number): string {
   });
 }
 
-function isoTime(timestamp: number): string | undefined {
-  const date = new Date(timestamp);
-  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
-}
 
 function NotificationRow({
   item,

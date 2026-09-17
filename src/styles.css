@@ -204,6 +204,28 @@ summary:focus-visible,
   color: var(--text);
 }
 
+.app-shell.has-banner {
+  grid-template-rows: var(--toolbar-height) auto minmax(0, 1fr);
+}
+
+.store-banner {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px 8px 16px;
+  background: var(--surface-selected);
+  border-bottom: 1px solid var(--control-border);
+  font-size: 13px;
+}
+
+.store-banner p {
+  min-width: 0;
+  flex: 1 1 auto;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .app-toolbar {
   position: relative;
   z-index: 40;
@@ -577,6 +599,11 @@ summary:focus-visible,
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
+}
+
+.row-delete.confirming.arming {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .row-delete.confirming:hover {

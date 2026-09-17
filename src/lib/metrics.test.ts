@@ -8,13 +8,17 @@ import {
   getCompletedFocusByTask,
   getCompletedFocusCount,
   getCompletedFocusMinutes,
+  getDayBoundsForKey,
   getInterruptionCounts,
+  getLocalDateKey,
   getLocalDayBounds,
   getSevenDayCompletedFocusSeries,
   getTaskActuals,
   getTaskPlannedTotal,
   getTodayFocusSessions,
   getTodayInterruptionCounts,
+  isWithinDay,
+  toIsoTime,
 } from "./metrics";
 
 const localTime = (
@@ -258,5 +262,30 @@ describe("formatting", () => {
     expect(formatRelativeTime(now - 12 * 60_000, now)).toBe("12m ago");
     expect(formatRelativeTime(now - 3 * 3_600_000, now)).toBe("3h ago");
     expect(formatRelativeTime(now - 2 * 86_400_000, now)).toBe("2d ago");
+  });
+});
+
+describe("day membership for stored timestamps", () => {
+  const noon = new Date(2026, 8, 17, 12, 0, 0).getTime();
+  const day = getDayBoundsForKey(getLocalDateKey(noon));
+
+  it("turns a day key back into that local day", () => {
+    expect(day).toEqual(getLocalDayBounds(noon));
+  });
+
+  it("includes the first millisecond of the day and excludes the first of the next", () => {
+    expect(isWithinDay(day.start, day)).toBe(true);
+    expect(isWithinDay(day.end - 1, day)).toBe(true);
+    expect(isWithinDay(day.end, day)).toBe(false);
+    expect(isWithinDay(day.start - 1, day)).toBe(false);
+  });
+
+  it("answers no, rather than throwing, for values that are not dates", () => {
+    // These run while rendering, over whatever the store holds.
+    for (const value of [9e18, -9e18, Number.NaN, Number.POSITIVE_INFINITY, null]) {
+      expect(isWithinDay(value, day)).toBe(false);
+    }
+    expect(toIsoTime(9e18)).toBeUndefined();
+    expect(toIsoTime(noon)).toBe(new Date(noon).toISOString());
   });
 });

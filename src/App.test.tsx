@@ -16,7 +16,30 @@ import App from "./App";
 import { defaultSnapshot } from "./types";
 import type { AppSnapshot, SessionRecord } from "./types";
 
-function session(id: string): SessionRecord {
+/** Enough of the Web Audio API for the chime to run to the end quietly. */
+function quietAudioContext() {
+  const param = { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() };
+  const node = () => ({
+    type: "sine",
+    frequency: { value: 0 },
+    gain: param,
+    connect: vi.fn(),
+    start: vi.fn(),
+    stop: vi.fn(),
+    onended: null,
+  });
+  return {
+    state: "running",
+    currentTime: 0,
+    destination: {},
+    createOscillator: node,
+    createGain: node,
+    resume: vi.fn(),
+    close: vi.fn(),
+  };
+}
+
+function session(id: string, endedAt = Date.now() - 86_400_000): SessionRecord {
   return {
     id,
     phase: "focus",
@@ -24,7 +47,7 @@ function session(id: string): SessionRecord {
     taskTitle: "Write the report",
     durationSeconds: 1_500,
     startedAt: Date.now() - 1_500_000,
-    endedAt: Date.now(),
+    endedAt,
     outcome: "completed",
   };
 }
@@ -121,26 +144,7 @@ describe("the theme button after a burst of clicks", () => {
 
 describe("the completion chime when the first read failed", () => {
   it("treats the first broadcast as history and chimes for what completes after it", async () => {
-    // Enough of the Web Audio API for the chime to run to the end quietly.
-    const param = { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() };
-    const node = () => ({
-      type: "sine",
-      frequency: { value: 0 },
-      gain: param,
-      connect: vi.fn(),
-      start: vi.fn(),
-      stop: vi.fn(),
-      onended: null,
-    });
-    const AudioContext = vi.fn(() => ({
-      state: "running",
-      currentTime: 0,
-      destination: {},
-      createOscillator: node,
-      createGain: node,
-      resume: vi.fn(),
-      close: vi.fn(),
-    }));
+    const AudioContext = vi.fn(() => quietAudioContext());
     vi.stubGlobal("AudioContext", AudioContext);
     invoke.mockImplementation((command: string) =>
       command === "get_snapshot" ? Promise.reject("unavailable") : Promise.resolve(),
@@ -160,6 +164,28 @@ describe("the completion chime when the first read failed", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("still chimes when that first broadcast is itself a session completing", async () => {
+    const AudioContext = vi.fn(() => quietAudioContext());
+    vi.stubGlobal("AudioContext", AudioContext);
+    invoke.mockImplementation((command: string) =>
+      command === "get_snapshot" ? Promise.reject("unavailable") : Promise.resolve(),
+    );
+    try {
+      render(<App />);
+      await screen.findByRole("button", { name: "Open settings" });
+
+      await act(async () =>
+        broadcast({
+          ...defaultSnapshot,
+          sessions: [session("old"), session("just-finished", Date.now() + 1_000)],
+        }),
+      );
+      expect(AudioContext).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe("a row menu left open from the keyboard", () => {
@@ -172,5 +198,51 @@ describe("a row menu left open from the keyboard", () => {
 
     fireEvent.keyDown(window, { key: "i", ctrlKey: true });
     expect(menu.open).toBe(false);
+  });
+});
+
+describe("when the saved data could not be read", () => {
+  it("says so, and says where the old file was kept", async () => {
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(
+        command === "get_snapshot"
+          ? { ...defaultSnapshot, recoveredStore: "pomodoro.unreadable-1234.json" }
+          : undefined,
+      ),
+    );
+    render(<App />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("could not read its saved data");
+    expect(alert.textContent).toContain("pomodoro.unreadable-1234.json");
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("says nothing on a normal launch", async () => {
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === "get_snapshot" ? defaultSnapshot : undefined),
+    );
+    render(<App />);
+    await screen.findByRole("button", { name: "Open settings" });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("the browser preview", () => {
+  it("keeps the theme it remembered instead of applying the default over it", async () => {
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    window.localStorage.setItem("pomodoro.theme", "dark");
+    document.documentElement.dataset.theme = "dark"; // as theme-init.js leaves it
+    try {
+      render(<App />);
+      await screen.findByRole("button", { name: /^Theme: Dark/ });
+      expect(document.documentElement.dataset.theme).toBe("dark");
+      expect(window.localStorage.getItem("pomodoro.theme")).toBe("dark");
+    } finally {
+      window.localStorage.clear();
+      delete document.documentElement.dataset.theme;
+    }
   });
 });

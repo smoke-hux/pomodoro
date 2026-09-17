@@ -69,6 +69,42 @@ export function getLocalDayBounds(timestamp: number): LocalDayBounds {
   return { start, end };
 }
 
+/** The local day that a key from getLocalDateKey names. */
+export function getDayBoundsForKey(dayKey: string): LocalDayBounds {
+  const [year, month, day] = dayKey.split("-").map(Number);
+  return getLocalDayBounds(new Date(year, month - 1, day).getTime());
+}
+
+/**
+ * Whether a stored timestamp falls on a day.
+ *
+ * A comparison, so it cannot throw. It runs while rendering, over timestamps
+ * read from the store, and one out-of-range value there — a hand-edited file, a
+ * clock that was wrong when it was written — must leave that item out of
+ * "today", not take the window down. Formatting each one as a date key did
+ * exactly that, and did the formatting for every item on every broadcast.
+ */
+export function isWithinDay(timestamp: number | null, day: LocalDayBounds): boolean {
+  return timestamp !== null && timestamp >= day.start && timestamp < day.end;
+}
+
+/** The minutes one session is shown as: rounded, and never less than one. */
+export function getSessionMinutes(durationSeconds: number): number {
+  return Math.max(1, Math.round(durationSeconds / 60));
+}
+
+/**
+ * Completed focus time as the sum of what each session is shown as, so the
+ * ledger's rows add up to its total and the toolbar agrees with both.
+ */
+export function getCompletedFocusDisplayMinutes(sessions: readonly SessionRecord[]): number {
+  return sessions.reduce(
+    (total, session) =>
+      total + (isCompletedFocus(session) ? getSessionMinutes(session.durationSeconds) : 0),
+    0,
+  );
+}
+
 export function getTodayFocusSessions(
   sessions: readonly SessionRecord[],
   now: number,
@@ -229,6 +265,15 @@ export function formatClock(timestamp: number): string {
 
 // Coarse on purpose. A captured notification is triaged after the interval, so
 // the useful question is "roughly when", not "how many seconds ago".
+/**
+ * A timestamp for a `<time dateTime>` attribute, or nothing if it is not one.
+ * `toISOString` throws on an invalid date, and this runs while rendering.
+ */
+export function toIsoTime(timestamp: number): string | undefined {
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
 export function formatRelativeTime(timestamp: number, now: number): string {
   const elapsed = now - timestamp;
 
