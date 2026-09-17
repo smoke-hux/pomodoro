@@ -1,7 +1,9 @@
 mod domain;
 mod notifications;
 mod quiet;
+mod sound;
 mod storage;
+mod system;
 
 use std::{
     sync::{
@@ -15,6 +17,7 @@ use std::{
 use chrono::Utc;
 use domain::{AppData, CaptureStatus, InterruptionCategory, Phase, Settings, TimerStatus};
 use notifications::NotificationListener;
+use sound::Cue;
 use storage::Store;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -281,6 +284,8 @@ fn lock_data(state: &RuntimeState) -> Result<std::sync::MutexGuard<'_, AppData>,
         .map_err(|_| "local timer state is unavailable".to_string())
 }
 
+/// Announces the end of a phase with a banner. The banner is silent, with no
+/// sound hint: the sound is [`sound::play`]'s business alone, see there.
 fn notify_boundary(app: &AppHandle, completed: Phase, snapshot: &AppData) {
     if !snapshot.settings.notifications {
         return;
@@ -616,10 +621,25 @@ where
 
 /// Tells the window, and the user if a phase ended, what a pass produced, and
 /// hands back the pass's result. Called with the data lock released.
+///
+/// The sound and the banner are two settings and neither waits on the other:
+/// the sound is decided here, ahead of [`notify_boundary`], because that
+/// returns early with notifications off and used to be the only alert there
+/// was. `sound::play` returns at once, so this costs the reconciliation thread
+/// nothing.
+///
+/// Only a phase that ran out while Pomodoro was watching gets here. Skipping
+/// or resetting an interval completes nothing, and a phase settled at launch
+/// by `recover_at_launch` is never broadcast as a completion, so both stay
+/// silent: nobody wants an alarm for an interval they cut short, or for one
+/// that ended while the application was closed.
 fn broadcast(app: &AppHandle, change: Change) -> Result<(), String> {
     if let Some(snapshot) = &change.snapshot {
         publish(app, snapshot);
         if let Some(phase) = change.completed {
+            if snapshot.settings.sound {
+                sound::play(Cue::IntervalFinished);
+            }
             notify_boundary(app, phase, snapshot);
         }
     }
@@ -766,20 +786,107 @@ fn update_task(
     })
 }
 
+/// What toggling a task should set off besides the change itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TaskAlert {
+    sound: bool,
+    notify: bool,
+}
+
+/// Decides [`TaskAlert`] for a task that was `was_done` and is `now_done`.
+///
+/// Only finishing a task is an occasion. Reopening one is a correction, often
+/// of a mis-click a second earlier, and congratulating it would be wrong
+/// twice. Each alert then follows its own setting and nothing else. Kept free
+/// of the state because the command around it cannot run without a window.
+fn task_alert(was_done: bool, now_done: bool, sound: bool, notifications: bool) -> TaskAlert {
+    let finished = !was_done && now_done;
+    TaskAlert {
+        sound: finished && sound,
+        notify: finished && notifications,
+    }
+}
+
 #[tauri::command]
 fn toggle_task(id: String, state: State<'_, RuntimeState>, app: AppHandle) -> Result<(), String> {
-    mutate(&state, &app, move |data, now| {
-        let done = data
+    // What the toggle turned out to be, carried out of the closure: the title
+    // and the settings are only to be had under the data lock, and the alert
+    // is only to be raised once that lock is gone.
+    let mut toggled: Option<(TaskAlert, String)> = None;
+    let result = mutate(&state, &app, |data, now| {
+        let (done, title) = data
             .tasks
             .iter()
             .find(|task| task.id == id)
-            .map(|task| task.done)
+            .map(|task| (task.done, task.title.clone()))
             .ok_or_else(|| "Task not found.".to_string())?;
         if !data.set_task_done(&id, !done, now) {
             return Err("Task not found.".to_string());
         }
+        let settings = &data.settings;
+        let alert = task_alert(done, !done, settings.sound, settings.notifications);
+        toggled = Some((alert, title));
         Ok(())
-    })
+    });
+    // `toggled` is set once the task has been marked done in memory, which is
+    // what the window then shows — whether or not the save that followed
+    // worked. The alert used to wait on the whole result, so a full disk meant
+    // a task ticked off in silence while the finished interval in the same
+    // situation was announced. Memory is the truth for the running session,
+    // here as in `broadcast`.
+    if let Some((alert, title)) = toggled {
+        // This very call may also have been the first to notice that an
+        // interval had run out, in which case `mutate` has already started the
+        // interval's sound. That one wins: a chime asked for while the alarm
+        // is playing is dropped, so the two never sound over each other.
+        if alert.sound {
+            sound::play(Cue::TaskDone);
+        }
+        if alert.notify {
+            // The title goes in the summary, which the notification
+            // specification keeps as plain text. Servers that advertise
+            // body-markup read the body as markup, and a task called
+            // "Fix a<b" came out mangled on the ones that do not repair it.
+            let _ = app
+                .notification()
+                .builder()
+                .title(task_complete_summary(&title))
+                .show();
+        }
+    }
+    result
+}
+
+/// The one line a "task complete" notification carries: the task's title,
+/// cut short if it would not fit a banner, and never empty.
+fn task_complete_summary(title: &str) -> String {
+    const MOST: usize = 80;
+    let title = title.trim();
+    let shown: String = if title.chars().count() > MOST {
+        format!("{}…", title.chars().take(MOST - 1).collect::<String>())
+    } else {
+        title.to_string()
+    };
+    if shown.is_empty() {
+        "Task complete".to_string()
+    } else {
+        format!("Task complete: {shown}")
+    }
+}
+
+/// Plays the interval sound so it can be heard from Settings before relying on
+/// it: whether there is a sound at all depends on what the machine has
+/// installed. Deliberately not behind the Sound setting — the button is how
+/// one decides about that setting — and it changes, saves and publishes
+/// nothing.
+///
+/// It answers only once the sound has played, or failed to, so the button can
+/// say "no": the whole point of pressing it is to learn whether anything will
+/// be heard. That wait is why the command is async — it runs off the main
+/// thread — and it is at most the sound's length plus the player's deadline.
+#[tauri::command(async)]
+fn preview_sound() -> Result<(), String> {
+    sound::play_and_report(Cue::IntervalFinished)
 }
 
 #[tauri::command]
@@ -1140,6 +1247,7 @@ pub fn run() {
             convert_notification,
             delete_notification,
             clear_notifications,
+            preview_sound,
         ])
         .build(tauri::generate_context!())
         .expect("error while running Pomodoro")
@@ -1490,6 +1598,33 @@ mod runtime {
         assert_eq!(again.result, Ok(()));
         assert!(again.snapshot.is_none());
         let _ = fs::remove_file(blocker);
+    }
+
+    #[test]
+    fn a_task_complete_notification_names_the_task_in_its_summary() {
+        assert_eq!(
+            task_complete_summary("  Fix a<b && c>d  "),
+            "Task complete: Fix a<b && c>d"
+        );
+        assert_eq!(task_complete_summary("   "), "Task complete");
+        let long = "x".repeat(200);
+        let summary = task_complete_summary(&long);
+        assert!(summary.ends_with('…'));
+        assert!(summary.chars().count() <= "Task complete: ".len() + 80);
+    }
+
+    #[test]
+    fn finishing_a_task_alerts_and_reopening_one_does_not() {
+        let alert = |sound, notify| TaskAlert { sound, notify };
+        // Finished: each alert follows its own setting, independently.
+        assert_eq!(task_alert(false, true, true, true), alert(true, true));
+        assert_eq!(task_alert(false, true, true, false), alert(true, false));
+        assert_eq!(task_alert(false, true, false, true), alert(false, true));
+        assert_eq!(task_alert(false, true, false, false), alert(false, false));
+        // Reopened, or not changed at all: nothing, whatever the settings.
+        assert_eq!(task_alert(true, false, true, true), alert(false, false));
+        assert_eq!(task_alert(true, true, true, true), alert(false, false));
+        assert_eq!(task_alert(false, false, true, true), alert(false, false));
     }
 
     #[test]

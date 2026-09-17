@@ -5,7 +5,8 @@ Pomodoro is a local-first focus timer for Ubuntu. It follows the Pomodoro Techni
 ## What it includes
 
 - A 25-minute focus, 5-minute short-break, and 15-minute long-break cycle by default
-- Configurable durations, round count, automatic transitions, notifications, sound, and theme
+- Configurable durations, round count, automatic transitions, and theme
+- A sound from the desktop's own sound theme, and a desktop notification, when an interval ends or a task is completed — also while the window is hidden in the tray
 - A task list with focus-session estimates and completed-session counts; tasks can be edited, and finished ones are grouped into today and earlier
 - A warning when a task is estimated above four sessions, encouraging smaller steps
 - Fast interruption capture that does not stop the timer
@@ -44,6 +45,14 @@ The Space key starts, pauses, and resumes the active timer. Ctrl+N adds a task. 
 The ⋯ menu on a task has **Edit**, for its title and estimate, and **Delete**. Several tasks can be open for editing at once, and a change the app refuses leaves the form open with what you typed.
 
 Ticking a task moves it under **Completed today**. Tasks finished on an earlier day sit under **Completed earlier**. Either can be reopened, or deleted with the bin icon, which asks once first. Deleting a task removes its session count; the sessions already recorded in the ledger stay.
+
+### Sound and notifications
+
+When an interval runs out, Pomodoro plays the desktop sound theme's "alarm clock elapsed" sound and shows a notification; when you tick a task off, it plays the theme's short "complete" sound and shows a notification naming the task. Both can be switched off separately under Settings → Alerts, and **Test sound** there plays the interval sound so you can hear it before relying on it — and tells you if nothing on the machine could play it.
+
+The sound is played by Pomodoro itself rather than attached to the notification, for two reasons: it has to work with the window closed to the tray, and GNOME's Do Not Disturb — which Pomodoro can switch on for you during focus — silences a notification's own sound along with its banner. It comes from your sound theme (`canberra-gtk-play`, part of every standard Ubuntu desktop), falling back to playing the theme's file with `pw-play`, `gst-play-1.0` or `paplay`. If none of those is available the interval still ends and the notification still shows; there is just no sound. The `.deb` recommends, rather than requires, a player and the `freedesktop` sound theme. An interval's alarm is never lost to a lesser sound: if it falls due while a task's chime is still playing, it plays next. Pomodoro's Sound setting is the only switch: it is not silenced by turning off the desktop's general "event sounds".
+
+An interval that ran out while Pomodoro was not running — after a crash, say — is settled quietly at the next launch, with no sound and no notification. Skipping or resetting an interval is not finishing one, so those are silent too.
 
 ### Theme
 

@@ -42,7 +42,8 @@
     ],
     "linux": {
       "deb": {
-        "depends": []
+        "depends": [],
+        "recommends": ["gnome-session-canberra | pipewire-bin", "sound-theme-freedesktop"]
       }
     }
   }

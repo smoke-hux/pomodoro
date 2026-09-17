@@ -16,29 +16,6 @@ import App from "./App";
 import { defaultSnapshot } from "./types";
 import type { AppSnapshot, SessionRecord } from "./types";
 
-/** Enough of the Web Audio API for the chime to run to the end quietly. */
-function quietAudioContext() {
-  const param = { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() };
-  const node = () => ({
-    type: "sine",
-    frequency: { value: 0 },
-    gain: param,
-    connect: vi.fn(),
-    start: vi.fn(),
-    stop: vi.fn(),
-    onended: null,
-  });
-  return {
-    state: "running",
-    currentTime: 0,
-    destination: {},
-    createOscillator: node,
-    createGain: node,
-    resume: vi.fn(),
-    close: vi.fn(),
-  };
-}
-
 function session(id: string, endedAt = Date.now() - 86_400_000): SessionRecord {
   return {
     id,
@@ -142,50 +119,38 @@ describe("the theme button after a burst of clicks", () => {
   });
 });
 
-describe("the completion chime when the first read failed", () => {
-  it("treats the first broadcast as history and chimes for what completes after it", async () => {
-    const AudioContext = vi.fn(() => quietAudioContext());
+describe("sound", () => {
+  it("is not made by the window: the backend plays the desktop's sound, tray or not", async () => {
+    // The window used to synthesise a beep when it saw a new completed session,
+    // which only worked while it was alive and visible, and doubled up with
+    // anything the backend played.
+    const AudioContext = vi.fn();
     vi.stubGlobal("AudioContext", AudioContext);
     invoke.mockImplementation((command: string) =>
-      command === "get_snapshot" ? Promise.reject("unavailable") : Promise.resolve(),
+      Promise.resolve(command === "get_snapshot" ? defaultSnapshot : undefined),
     );
     try {
       render(<App />);
       await screen.findByRole("button", { name: "Open settings" });
-
-      await act(async () => broadcast({ ...defaultSnapshot, sessions: [session("old")] }));
+      await act(async () => broadcast({ ...defaultSnapshot, sessions: [session("just-finished")] }));
       expect(AudioContext).not.toHaveBeenCalled();
-
-      await act(async () =>
-        broadcast({ ...defaultSnapshot, sessions: [session("old"), session("new")] }),
-      );
-      expect(AudioContext).toHaveBeenCalledTimes(1);
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it("still chimes when that first broadcast is itself a session completing", async () => {
-    const AudioContext = vi.fn(() => quietAudioContext());
-    vi.stubGlobal("AudioContext", AudioContext);
+  it("asks the backend to play it when Test sound is pressed", async () => {
     invoke.mockImplementation((command: string) =>
-      command === "get_snapshot" ? Promise.reject("unavailable") : Promise.resolve(),
+      Promise.resolve(command === "get_snapshot" ? defaultSnapshot : undefined),
     );
-    try {
-      render(<App />);
-      await screen.findByRole("button", { name: "Open settings" });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Open settings" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Test sound" }));
 
-      await act(async () =>
-        broadcast({
-          ...defaultSnapshot,
-          sessions: [session("old"), session("just-finished", Date.now() + 1_000)],
-        }),
-      );
-      expect(AudioContext).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("preview_sound", {}));
+    // The whole app and the settings dialog in jsdom, under the suite's
+    // parallel load: slow enough to trip the default five seconds.
+  }, 20_000);
 });
 
 describe("a row menu left open from the keyboard", () => {

@@ -133,40 +133,6 @@ const themeLabels: Record<ThemePreference, string> = {
 };
 const themeIcons = { system: Monitor, light: Sun, dark: Moon };
 
-async function playCompletionChime() {
-  const AudioContextClass = window.AudioContext;
-  if (!AudioContextClass) return;
-
-  const context = new AudioContextClass();
-  try {
-    if (context.state === "suspended") {
-      await context.resume();
-    }
-    const start = context.currentTime;
-    const notes = [
-      { frequency: 440, offset: 0, duration: 0.2 },
-      { frequency: 554.37, offset: 0.14, duration: 0.28 },
-    ];
-    notes.forEach((note, index) => {
-      const oscillator = context.createOscillator();
-      const gain = context.createGain();
-      oscillator.type = "sine";
-      oscillator.frequency.value = note.frequency;
-      gain.gain.setValueAtTime(0.0001, start + note.offset);
-      gain.gain.exponentialRampToValueAtTime(0.035, start + note.offset + 0.018);
-      gain.gain.exponentialRampToValueAtTime(0.0001, start + note.offset + note.duration);
-      oscillator.connect(gain);
-      gain.connect(context.destination);
-      oscillator.start(start + note.offset);
-      oscillator.stop(start + note.offset + note.duration);
-      if (index === notes.length - 1) {
-        oscillator.onended = () => void context.close();
-      }
-    });
-  } catch {
-    void context.close();
-  }
-}
 export default function App() {
   const inTauri = "__TAURI_INTERNALS__" in window;
   // A function, so the preview snapshot — and the storage read inside it — is
@@ -185,9 +151,6 @@ export default function App() {
   const [settingsLoaded, setSettingsLoaded] = useState(!inTauri);
   const noticeTimer = useRef<number | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
-  const knownSessionIds = useRef(new Set<string>());
-  const hasSessionBaseline = useRef(!inTauri);
-  const openedAt = useRef(Date.now());
 
   // The countdown lives here, not in the snapshot. The backend sends a
   // deadline and this window counts down to it locally; the snapshot only
@@ -270,23 +233,9 @@ export default function App() {
 
     const unlisten = listen<AppSnapshot>("state-changed", (event) => {
       if (cancelled) return;
-      let hasNewCompletion = false;
-      // If the initial read failed, the first broadcast is the baseline, and
-      // what it holds is history — except a session that ended after this
-      // window opened, which is the very completion the broadcast announces.
-      const isBaseline = !hasSessionBaseline.current;
-      hasSessionBaseline.current = true;
-      for (const session of event.payload.sessions) {
-        if (knownSessionIds.current.has(session.id)) continue;
-        knownSessionIds.current.add(session.id);
-        const isNew = !isBaseline || session.endedAt >= openedAt.current;
-        if (isNew && session.outcome === "completed") {
-          hasNewCompletion = true;
-        }
-      }
-      if (hasNewCompletion && event.payload.settings.sound) {
-        void playCompletionChime();
-      }
+      // No sound from here: the backend plays the desktop's own sound when an
+      // interval ends, which works with this window hidden in the tray and
+      // needs no bookkeeping about which sessions this window has seen.
       receivedBroadcast = true;
       setSnapshot(event.payload);
       setSettingsLoaded(true);
@@ -306,10 +255,6 @@ export default function App() {
       .then(() => api.snapshot())
       .then((next) => {
         if (cancelled) return;
-        for (const session of next.sessions) {
-          knownSessionIds.current.add(session.id);
-        }
-        hasSessionBaseline.current = true;
         if (!receivedBroadcast) setSnapshot(next);
         setSettingsLoaded(true);
         setReady(true);
@@ -446,6 +391,10 @@ export default function App() {
     (settings: Settings) => run(() => api.updateSettings(settings), "Settings saved."),
     [run],
   );
+  // Resolves once the sound has played or failed: the backend answers only
+  // then, so the button can say it is playing and the failure, if any, is
+  // shown as a notice.
+  const previewSound = useCallback(() => run(api.previewSound), [run]);
   const clearHistory = useCallback(async () => {
     await run(api.clearHistory, "Session history cleared.");
   }, [run]);
@@ -701,6 +650,7 @@ export default function App() {
         notificationCount={snapshot.notifications.length}
         onClose={closeSettings}
         onSave={saveSettings}
+        onPreviewSound={previewSound}
         onClearHistory={clearHistory}
         onClearNotifications={clearNotifications}
       />

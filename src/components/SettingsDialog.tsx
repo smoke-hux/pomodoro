@@ -37,6 +37,8 @@ interface SettingsDialogProps {
   onClose: () => void;
   /** Resolves to whether the settings were saved. A refused save keeps the dialog and the edits. */
   onSave: (settings: Settings) => Promise<boolean>;
+  /** Plays the interval-finished sound once, so it can be heard before relying on it. Resolves when it has played or failed. */
+  onPreviewSound: () => Promise<boolean>;
   onClearHistory: () => Promise<void>;
   onClearNotifications: () => Promise<void>;
 }
@@ -234,6 +236,7 @@ function SettingsDialogComponent({
   notificationCount,
   onClose,
   onSave,
+  onPreviewSound,
   onClearHistory,
   onClearNotifications,
 }: SettingsDialogProps) {
@@ -241,6 +244,7 @@ function SettingsDialogComponent({
   const [confirmClear, setConfirmClear] = useState(false);
   const [confirmClearNotifications, setConfirmClearNotifications] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
   const dialogRef = useRef<HTMLElement>(null);
   useModalFocus(open, dialogRef);
 
@@ -373,7 +377,7 @@ function SettingsDialogComponent({
               <label className="toggle-row">
                 <span>
                   <strong>Desktop notifications</strong>
-                  <small>Show an Ubuntu notification at every boundary.</small>
+                  <small>Show a desktop notification when an interval ends or a task is completed.</small>
                 </span>
                 <input
                   type="checkbox"
@@ -385,8 +389,11 @@ function SettingsDialogComponent({
               </label>
               <label className="toggle-row">
                 <span>
-                  <strong>Notification sound</strong>
-                  <small>Use the desktop’s standard message sound.</small>
+                  <strong>Sound</strong>
+                  <small>
+                    Play a sound from the desktop’s sound theme when an interval ends or a
+                    task is completed — also while this window is hidden in the tray.
+                  </small>
                 </span>
                 <input
                   type="checkbox"
@@ -394,6 +401,20 @@ function SettingsDialogComponent({
                   onChange={(event) => setDraft({ ...draft, sound: event.target.checked })}
                 />
               </label>
+              <div className="setting-row">
+                <span className="setting-hint">Hear the interval-finished sound now.</span>
+                <button
+                  className="text-button"
+                  type="button"
+                  disabled={previewing}
+                  onClick={() => {
+                    setPreviewing(true);
+                    void onPreviewSound().finally(() => setPreviewing(false));
+                  }}
+                >
+                  {previewing ? "Playing…" : "Test sound"}
+                </button>
+              </div>
             </fieldset>
 
             <fieldset>
