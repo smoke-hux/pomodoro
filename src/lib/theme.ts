@@ -3,15 +3,27 @@ import type { ThemePreference } from "../types";
 
 export type ResolvedTheme = "light" | "dark";
 
-const STORAGE_KEY = "pomodoro.theme";
+/** Read back by public/theme-init.js, which cannot import it. */
+export const THEME_STORAGE_KEY = "pomodoro.theme";
 const DARK_QUERY = "(prefers-color-scheme: dark)";
 /** `--canvas` in each theme, for the `theme-color` meta tag. */
 const CANVAS: Record<ResolvedTheme, string> = { light: "#f2eee7", dark: "#181512" };
 
 const ORDER: ThemePreference[] = ["system", "light", "dark"];
 
-/** Read back by public/theme-init.js, which cannot import it. */
-export const THEME_STORAGE_KEY = STORAGE_KEY;
+/**
+ * The preference applyTheme last remembered, or "system". For the browser
+ * preview, which has no backend to hold the setting: without it every reload
+ * applied the default over the choice theme-init.js had just painted.
+ */
+export function readRememberedTheme(): ThemePreference {
+  try {
+    const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+    return stored === "light" || stored === "dark" ? stored : "system";
+  } catch {
+    return "system";
+  }
+}
 
 /** The preference after `current` in the toolbar button's System → Light → Dark cycle. */
 export function nextTheme(current: ThemePreference): ThemePreference {
@@ -38,7 +50,7 @@ export function applyTheme(preference: ThemePreference, systemDark: boolean) {
     .querySelector('meta[name="theme-color"]')
     ?.setAttribute("content", CANVAS[resolveTheme(preference, systemDark)]);
   try {
-    window.localStorage.setItem(STORAGE_KEY, preference);
+    window.localStorage.setItem(THEME_STORAGE_KEY, preference);
   } catch {
     // Remembering is a convenience; the theme itself is already applied.
   }

@@ -121,40 +121,51 @@ describe("completed tasks", () => {
   });
 
   it("can be deleted, but only after asking once", () => {
-    const { onDeleteTask } = renderSidebar([
-      task({ id: "b", title: "Done last week", done: true, completedAt: NOW - 6 * DAY }),
-    ]);
-    const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+    vi.useFakeTimers();
     try {
+      const { onDeleteTask } = renderSidebar([
+        task({ id: "b", title: "Done last week", done: true, completedAt: NOW - 6 * DAY }),
+      ]);
       // One stray click next to "reopen" must not remove the record.
       fireEvent.click(screen.getByRole("button", { name: "Delete Done last week" }));
       expect(onDeleteTask).not.toHaveBeenCalled();
 
-      clock.mockReturnValue(NOW + 1_000);
+      act(() => void vi.advanceTimersByTime(1_000));
       fireEvent.click(screen.getByRole("button", { name: /Confirm deleting Done last week/ }));
       expect(onDeleteTask).toHaveBeenCalledWith("b");
     } finally {
-      clock.mockRestore();
+      vi.useRealTimers();
     }
   });
 
-  it("is not deleted by the second half of the double click that asked", () => {
+  it("is not deleted by the second half of the double click that asked, and shows it is not ready", () => {
     // The confirm button appears under the pointer and takes focus, so a double
     // click, or Enter held a moment too long, used to answer its own question.
-    const { onDeleteTask } = renderSidebar([
-      task({ id: "b", title: "Done last week", done: true, completedAt: NOW - 6 * DAY }),
-    ]);
-    const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+    vi.useFakeTimers();
     try {
+      const { onDeleteTask } = renderSidebar([
+        task({ id: "b", title: "Done last week", done: true, completedAt: NOW - 6 * DAY }),
+      ]);
       fireEvent.click(screen.getByRole("button", { name: "Delete Done last week" }));
-      clock.mockReturnValue(NOW + 180);
-      fireEvent.click(screen.getByRole("button", { name: /Confirm deleting/ }));
+      act(() => void vi.advanceTimersByTime(180));
+      const confirm = screen.getByRole("button", { name: /Confirm deleting/ });
+      fireEvent.click(confirm);
 
       expect(onDeleteTask).not.toHaveBeenCalled();
-      // Still asking, so a deliberate answer is still possible.
-      expect(screen.getByRole("button", { name: /Confirm deleting/ })).toBeTruthy();
+      // An ignored press must not look like a delete that happened.
+      expect(confirm.getAttribute("aria-disabled")).toBe("true");
+      expect(confirm.className).toContain("arming");
+
+      // Focus is already on the button, and a screen reader does not re-announce
+      // a focused element changing state, so readiness has to be said aloud.
+      expect(screen.getByRole("status").textContent).toBe("");
+
+      act(() => void vi.advanceTimersByTime(500));
+      expect(confirm.getAttribute("aria-disabled")).toBe("false");
+      expect(confirm.className).not.toContain("arming");
+      expect(screen.getByRole("status").textContent).toContain("Press again to delete Done last week");
     } finally {
-      clock.mockRestore();
+      vi.useRealTimers();
     }
   });
 
@@ -199,5 +210,11 @@ describe("completed tasks", () => {
         screen.getByRole("button", { name: "Delete Done last week" }),
       ),
     );
+  });
+
+  it("survives a completion time no calendar can hold", () => {
+    // Formatting it as a date threw while rendering and blanked the window.
+    renderSidebar([task({ id: "c", title: "Odd one", done: true, completedAt: 9e18 })]);
+    expect(screen.getByText("Completed earlier (1)")).toBeTruthy();
   });
 });

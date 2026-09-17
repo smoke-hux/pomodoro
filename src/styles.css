@@ -204,6 +204,28 @@ summary:focus-visible,
   color: var(--text);
 }
 
+.app-shell.has-banner {
+  grid-template-rows: var(--toolbar-height) auto minmax(0, 1fr);
+}
+
+.store-banner {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px 8px 16px;
+  background: var(--surface-selected);
+  border-bottom: 1px solid var(--control-border);
+  font-size: 13px;
+}
+
+.store-banner p {
+  min-width: 0;
+  flex: 1 1 auto;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .app-toolbar {
   position: relative;
   z-index: 40;
@@ -582,6 +604,16 @@ summary:focus-visible,
 .row-delete.confirming:hover {
   background: var(--danger-hover);
   color: var(--on-danger);
+}
+
+/* After the hover rule, which it ties with on specificity. The button appears
+   under the pointer that just pressed the bin, so it is hovered from its first
+   frame; hover must not make it look ready while presses are being ignored. */
+.row-delete.confirming.arming,
+.row-delete.confirming.arming:hover {
+  background: var(--danger);
+  opacity: 0.55;
+  cursor: default;
 }
 
 .completed-title {
@@ -1469,10 +1501,14 @@ input[type="radio"] {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* Placed inside the workspace, not against the window: the workspace starts
+     below whatever is above it, and that is not always just the toolbar. Pinned
+     at the toolbar's height, the drawer and its scrim covered the notice that
+     is shown when the saved data could not be read, Dismiss button included. */
   .sidebar-wrap {
-    position: fixed;
+    position: absolute;
     z-index: 70;
-    top: var(--toolbar-height);
+    top: 0;
     bottom: 0;
     left: 0;
     display: none;
@@ -1486,9 +1522,9 @@ input[type="radio"] {
   }
 
   .sidebar-scrim {
-    position: fixed;
+    position: absolute;
     z-index: 60;
-    top: var(--toolbar-height);
+    top: 0;
     right: 0;
     bottom: 0;
     left: 0;

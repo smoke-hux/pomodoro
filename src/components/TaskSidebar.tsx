@@ -14,7 +14,7 @@ import type {
   FocusTask,
   Interruption,
 } from "../types";
-import { getLocalDateKey } from "../lib/metrics";
+import { getDayBoundsForKey, isWithinDay, toIsoTime } from "../lib/metrics";
 import { NotificationInbox } from "./NotificationInbox";
 
 interface TaskSidebarProps {
@@ -46,6 +46,19 @@ interface TaskSidebarProps {
 
 /** How long "Delete task?" ignores presses after appearing. Longer than a double click. */
 const CONFIRM_ARMING_MS = 600;
+
+/**
+ * Focuses something inside a task's row, in the next frame — after React has
+ * put back whatever replaced it. The id is compared, not built into a
+ * selector, so no task id can break the query.
+ */
+function focusInRow(container: HTMLElement | null, taskId: string, selector: string) {
+  requestAnimationFrame(() => {
+    for (const row of container?.querySelectorAll<HTMLElement>("[data-task-id]") ?? []) {
+      if (row.dataset.taskId === taskId) row.querySelector<HTMLElement>(selector)?.focus();
+    }
+  });
+}
 
 interface TaskComposerProps {
   /** Prefixes the field ids, so the add and edit forms never share one. */
@@ -182,8 +195,6 @@ function TaskSidebarComponent({
   // A set, not one id: with a single editor, choosing Edit on a second row
   // unmounted the first and threw away whatever had been typed into it.
   const [editingIds, setEditingIds] = useState<ReadonlySet<string>>(() => new Set());
-  // When the confirm button appeared; see the click handler.
-  const confirmShownAt = useRef(0);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   // The heading says "today", so it lists today. Tasks finished on an earlier
@@ -192,9 +203,10 @@ function TaskSidebarComponent({
     const open: FocusTask[] = [];
     const today: FocusTask[] = [];
     const earlier: FocusTask[] = [];
+    const day = getDayBoundsForKey(dayKey);
     for (const task of tasks) {
       if (!task.done) open.push(task);
-      else if (task.completedAt !== null && getLocalDateKey(task.completedAt) === dayKey) today.push(task);
+      else if (isWithinDay(task.completedAt, day)) today.push(task);
       else earlier.push(task);
     }
     return { openTasks: open, completedToday: today, completedEarlier: earlier };
@@ -227,13 +239,24 @@ function TaskSidebarComponent({
   const cancelConfirmDelete = useCallback((id: string) => {
     const hadFocus = document.activeElement?.matches(".row-delete.confirming") ?? false;
     setConfirmDeleteId((current) => (current === id ? null : current));
-    if (!hadFocus) return;
-    requestAnimationFrame(() => {
-      for (const row of completedRef.current?.querySelectorAll<HTMLElement>("[data-task-id]") ?? []) {
-        if (row.dataset.taskId === id) row.querySelector<HTMLElement>(".row-delete")?.focus();
-      }
-    });
+    if (hadFocus) focusInRow(completedRef.current, id, ".row-delete");
   }, []);
+
+  // "Delete task?" appears where the trash button was and takes focus, so the
+  // second half of a double click, or Enter held a moment too long, lands on
+  // it. It does not act until it has been on screen long enough to be read —
+  // and it looks that way, so a press that is ignored is not mistaken for a
+  // delete that happened. A screen reader hears "unavailable" when focus lands
+  // on it, and a change of state on the focused element is not announced
+  // again, so becoming ready is said out loud through a live region.
+  const [confirmArmed, setConfirmArmed] = useState(false);
+  const confirmingTask = tasks.find((task) => task.id === confirmDeleteId) ?? null;
+  useEffect(() => {
+    setConfirmArmed(false);
+    if (confirmDeleteId === null) return;
+    const timeout = window.setTimeout(() => setConfirmArmed(true), CONFIRM_ARMING_MS);
+    return () => window.clearTimeout(timeout);
+  }, [confirmDeleteId]);
   useEffect(() => {
     if (confirmDeleteId === null) return;
     const timeout = window.setTimeout(() => cancelConfirmDelete(confirmDeleteId), 4_000);
@@ -249,11 +272,7 @@ function TaskSidebarComponent({
       next.delete(id);
       return next;
     });
-    requestAnimationFrame(() => {
-      for (const row of listRef.current?.querySelectorAll<HTMLElement>("[data-task-id]") ?? []) {
-        if (row.dataset.taskId === id) row.querySelector<HTMLElement>(".row-menu > summary")?.focus();
-      }
-    });
+    focusInRow(listRef.current, id, ".row-menu > summary");
   };
 
   const submitNew = async (title: string, estimate: number) => {
@@ -279,14 +298,12 @@ function TaskSidebarComponent({
       <span className="completed-title">{task.title}</span>
       {confirmDeleteId === task.id ? (
         <button
-          className="row-delete confirming"
+          className={`row-delete confirming${confirmArmed ? "" : " arming"}`}
+          // Not `disabled`: that would refuse the focus it is about to be given.
+          aria-disabled={!confirmArmed}
           type="button"
           onClick={() => {
-            // This button appears where the trash button was and takes focus,
-            // so the second half of a double click, or Enter held a moment too
-            // long, lands on it. An answer that arrives before the question
-            // could have been read is part of the gesture that asked it.
-            if (Date.now() - confirmShownAt.current < CONFIRM_ARMING_MS) return;
+            if (!confirmArmed) return;
             setConfirmDeleteId(null);
             onDeleteTask(task.id);
           }}
@@ -315,10 +332,7 @@ function TaskSidebarComponent({
           <button
             className="row-delete"
             type="button"
-            onClick={() => {
-              confirmShownAt.current = Date.now();
-              setConfirmDeleteId(task.id);
-            }}
+            onClick={() => setConfirmDeleteId(task.id)}
             aria-label={`Delete ${task.title}`}
             title="Delete"
           >
@@ -338,6 +352,11 @@ function TaskSidebarComponent({
       className={`sidebar ${capturesQuiet ? "captures-quiet" : ""}`}
       aria-label="Tasks, interruptions, and captured notifications"
     >
+      <div className="visually-hidden" role="status" aria-live="polite">
+        {confirmingTask && confirmArmed
+          ? `Ready. Press again to delete ${confirmingTask.title}, or Escape to keep it.`
+          : ""}
+      </div>
       <section className="sidebar-section task-section" aria-labelledby="tasks-heading">
         <div className="section-bar">
           <h2 id="tasks-heading">Today</h2>
@@ -479,7 +498,7 @@ function TaskSidebarComponent({
                   title="Mark handled"
                 >
                   <span>{item.text}</span>
-                  <time dateTime={new Date(item.capturedAt).toISOString()}>
+                  <time dateTime={toIsoTime(item.capturedAt)}>
                     {new Date(item.capturedAt).toLocaleTimeString([], {
                       hour: "2-digit",
                       minute: "2-digit",

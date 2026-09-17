@@ -73,6 +73,8 @@ Application data is stored beneath the standard Linux user data directory, norma
 
 The file holds captured notification text, so Pomodoro restricts it to its owner (`0600`) inside an owner-only directory (`0700`) on every save. A store written by an earlier build is tightened the next time the app saves.
 
+If the file cannot be read at launch — truncated by a full disk, or edited by hand into something that will not parse — Pomodoro starts fresh and says so in the window. It does not save over the old file: it is kept beside `pomodoro.json` as `pomodoro.unreadable-<timestamp>.json`, owner-only like the store itself, so it can be repaired or mined by hand. If it cannot be moved aside either — a data folder that has become read-only, say — Pomodoro leaves it exactly where it is and saves nothing for that session, and the notice says so.
+
 Settings includes explicit, confirmed actions for clearing session history and for deleting every captured notification. Removing the application does not automatically remove this local data file.
 
 ### Upgrading from the Kipindi build

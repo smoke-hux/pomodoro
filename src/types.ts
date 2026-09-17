@@ -132,6 +132,12 @@ export interface AppSnapshot {
   sessions: SessionRecord[];
   notifications: DesktopNotification[];
   captureStatus: CaptureStatus;
+  /**
+   * Set when the saved data could not be read at launch and the app started
+   * fresh: the name the unreadable file was kept under, or "" if it could not
+   * be kept. Null on a normal launch.
+   */
+  recoveredStore: string | null;
 }
 
 export const defaultSnapshot: AppSnapshot = {
@@ -171,4 +177,5 @@ export const defaultSnapshot: AppSnapshot = {
   sessions: [],
   notifications: [],
   captureStatus: { state: "off", detail: "" },
+  recoveredStore: null,
 };

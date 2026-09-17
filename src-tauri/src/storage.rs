@@ -2,6 +2,7 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use crate::domain::AppData;
@@ -41,12 +42,17 @@ const FILE_MODE: u32 = 0;
 
 pub struct Store {
     path: PathBuf,
+    /// False once an unreadable store could be neither moved nor copied aside.
+    /// The file at `path` is then the only copy of whatever the person had,
+    /// and [`Store::save`] leaves it alone for the rest of the session.
+    writable: AtomicBool,
 }
 
 impl Store {
     pub fn new(data_dir: impl AsRef<Path>) -> Self {
         Self {
             path: data_dir.as_ref().join("pomodoro.json"),
+            writable: AtomicBool::new(true),
         }
     }
 
@@ -61,7 +67,68 @@ impl Store {
             .map_err(|error| format!("could not parse {}: {error}", self.path.display()))
     }
 
+    /// Loads the store, and if it exists but cannot be read, moves it aside
+    /// before anything can be saved over it.
+    ///
+    /// Starting from defaults after a failed load used to be silent, and the
+    /// first save — any click at all — then replaced the unreadable file with
+    /// those defaults. A file that will not parse today may still be
+    /// recoverable by hand, so it is kept, under a name that says when it was
+    /// set aside, and that name travels in `recovered_store` so the UI can
+    /// show it.
+    ///
+    /// Setting aside can itself fail — a directory that cannot be written to
+    /// refuses the rename and the copy alike. The app still ran after that,
+    /// and the next save renamed a temporary file over the unreadable
+    /// original: the very loss this function exists to prevent, one step
+    /// later. So a file that could not be kept closes the store to writing,
+    /// and `recovered_store` is left empty to say there is no copy.
+    pub fn load_or_set_aside(&self, now_ms: i64) -> AppData {
+        let error = match self.load() {
+            Ok(data) => return data,
+            Err(error) => error,
+        };
+        eprintln!("{error}; starting with an empty local data set");
+
+        let aside = self
+            .path
+            .with_file_name(format!("pomodoro.unreadable-{now_ms}.json"));
+        // Copying is the fallback for a file that can be read but not moved.
+        let kept = fs::rename(&self.path, &aside).is_ok() || fs::copy(&self.path, &aside).is_ok();
+        let name = if kept {
+            // It may hold captured notification text, like the store itself.
+            restrict(&aside, FILE_MODE);
+            aside
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        } else {
+            eprintln!(
+                "could not set the unreadable store aside; nothing will be saved this session"
+            );
+            self.writable.store(false, Ordering::Release);
+            String::new()
+        };
+        AppData {
+            recovered_store: Some(name),
+            ..AppData::default()
+        }
+    }
+
+    /// Writes the data to disk, unless the store has been closed to writing.
+    ///
+    /// A closed store answers `Ok` without touching the disk at all — no
+    /// directory created, no permissions changed, no temporary file — and the
+    /// session runs in memory only. Refusing with an error instead would fail
+    /// every command at its `store.save(&data)?` and freeze the UI over a file
+    /// the person cannot do anything about from inside the app. Doing nothing
+    /// lets them keep using the timer while the banner tells them that nothing
+    /// is being saved.
     pub fn save(&self, data: &AppData) -> Result<(), String> {
+        if !self.writable.load(Ordering::Acquire) {
+            return Ok(());
+        }
+
         let parent = self
             .path
             .parent()
@@ -113,6 +180,124 @@ mod tests {
         let loaded = store.load().expect("saved data should load");
         assert_eq!(loaded.tasks.len(), 1);
         assert_eq!(loaded.tasks[0].title, "Round trip");
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn an_unreadable_store_is_set_aside_rather_than_saved_over() {
+        let directory = std::env::temp_dir().join(format!(
+            "pomodoro-aside-test-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_millis()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let store = Store::new(&directory);
+        fs::write(directory.join("pomodoro.json"), b"{ \"tasks\": [ truncated").unwrap();
+
+        let data = store.load_or_set_aside(1_234);
+        assert!(data.tasks.is_empty());
+        assert_eq!(
+            data.recovered_store.as_deref(),
+            Some("pomodoro.unreadable-1234.json")
+        );
+
+        // The first save after that is what used to destroy the old file.
+        store.save(&data).expect("save should succeed");
+        let kept = fs::read(directory.join("pomodoro.unreadable-1234.json")).unwrap();
+        assert_eq!(kept, b"{ \"tasks\": [ truncated");
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn a_missing_or_readable_store_is_not_a_recovery() {
+        let directory = std::env::temp_dir().join(format!(
+            "pomodoro-fresh-test-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_millis()
+        ));
+        let store = Store::new(&directory);
+        let data = store.load_or_set_aside(1);
+        assert_eq!(data.recovered_store, None);
+
+        store.save(&data).expect("save should succeed");
+        assert_eq!(store.load_or_set_aside(2).recovered_store, None);
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn a_store_closed_to_writing_is_never_written() {
+        let directory = std::env::temp_dir().join(format!(
+            "pomodoro-closed-test-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_millis()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let store = Store::new(&directory);
+        fs::write(&store.path, b"{ \"tasks\": [ truncated").unwrap();
+        store.writable.store(false, Ordering::Release);
+
+        // Ok, not Err: an error here would fail every command in the app.
+        store
+            .save(&AppData::default())
+            .expect("a closed store should accept the save and do nothing");
+
+        assert_eq!(fs::read(&store.path).unwrap(), b"{ \"tasks\": [ truncated");
+        assert!(!store.path.with_extension("json.tmp").exists());
+        let entries = fs::read_dir(&directory).unwrap().count();
+        assert_eq!(entries, 1, "nothing else was created beside the store");
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    /// The real double failure: a directory that cannot be written to refuses
+    /// the rename and the copy alike. Before the store could be closed, the
+    /// save that followed put the directory's permissions back to `rwx------`
+    /// on its way in and then replaced the unreadable file with defaults.
+    #[cfg(unix)]
+    #[test]
+    fn a_store_that_cannot_be_set_aside_is_not_saved_over() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = std::env::temp_dir().join(format!(
+            "pomodoro-stuck-test-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_millis()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let store = Store::new(&directory);
+        fs::write(&store.path, b"{ \"tasks\": [ truncated").unwrap();
+        let set_mode = |mode: u32| {
+            fs::set_permissions(&directory, fs::Permissions::from_mode(mode)).unwrap();
+        };
+        set_mode(0o500);
+
+        // Root ignores directory permissions, so nothing can be made to fail
+        // there. Asking the directory is surer than asking for a uid, and
+        // covers any other arrangement that lets the write through.
+        let probe = directory.join("probe");
+        if fs::File::create(&probe).is_ok() {
+            eprintln!("directory permissions are not enforced here; skipping");
+            set_mode(0o700);
+            let _ = fs::remove_dir_all(directory);
+            return;
+        }
+
+        let data = store.load_or_set_aside(1_234);
+        let saved = store.save(&data);
+        let after = fs::read(&store.path);
+        let mode = fs::metadata(&directory).unwrap().permissions().mode() & 0o777;
+        // Restored before any assertion can fail, so the cleanup always works.
+        set_mode(0o700);
+
+        assert_eq!(data.recovered_store, Some(String::new()));
+        assert_eq!(saved, Ok(()));
+        assert_eq!(after.unwrap(), b"{ \"tasks\": [ truncated");
+        assert_eq!(mode, 0o500, "the save did not reach for the directory");
+        assert!(!store.path.with_extension("json.tmp").exists());
+        assert!(!directory.join("pomodoro.unreadable-1234.json").exists());
 
         let _ = fs::remove_dir_all(directory);
     }

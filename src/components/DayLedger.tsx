@@ -1,6 +1,12 @@
 import { memo } from "react";
 import { ChevronDown } from "lucide-react";
-import { getCompletedFocusMinutes, getLocalDateKey } from "../lib/metrics";
+import {
+  getCompletedFocusDisplayMinutes,
+  getDayBoundsForKey,
+  getSessionMinutes,
+  isWithinDay,
+  toIsoTime,
+} from "../lib/metrics";
 import type { FocusTask, Interruption, SessionRecord } from "../types";
 
 interface DayLedgerProps {
@@ -11,23 +17,20 @@ interface DayLedgerProps {
   interruptions: Interruption[];
 }
 
-function minutes(seconds: number) {
-  return Math.max(1, Math.round(seconds / 60));
-}
-
 function DayLedgerComponent({ dayKey, sessions, tasks, interruptions }: DayLedgerProps) {
-  const isToday = (timestamp: number) => getLocalDateKey(timestamp) === dayKey;
+  const day = getDayBoundsForKey(dayKey);
+  const isToday = (timestamp: number | null) => isWithinDay(timestamp, day);
   const today = sessions
     .filter((session) => isToday(session.startedAt))
     .sort((a, b) => b.startedAt - a.startedAt);
   const focus = today.filter(
     (session) => session.phase === "focus" && session.outcome === "completed",
   );
-  // The same sum the toolbar shows. Adding up each row's rounded minutes
-  // instead let the two totals disagree on the same screen.
-  const focusMinutes = Math.round(getCompletedFocusMinutes(focus));
+  // The sum of what the rows below show, and the same figure as the toolbar:
+  // three numbers on one screen that have to agree.
+  const focusMinutes = getCompletedFocusDisplayMinutes(focus);
   const planned = tasks
-    .filter((task) => !task.done || (task.completedAt !== null && isToday(task.completedAt)))
+    .filter((task) => !task.done || isToday(task.completedAt))
     .reduce((total, task) => total + task.estimate, 0);
   const todayInterruptions = interruptions.filter((item) => isToday(item.capturedAt));
 
@@ -59,7 +62,7 @@ function DayLedgerComponent({ dayKey, sessions, tasks, interruptions }: DayLedge
           ) : (
             today.slice(0, 12).map((session) => (
               <div className="session-row" role="listitem" key={session.id}>
-                <time dateTime={new Date(session.startedAt).toISOString()}>
+                <time dateTime={toIsoTime(session.startedAt)}>
                   {new Date(session.startedAt).toLocaleTimeString([], {
                     hour: "2-digit",
                     minute: "2-digit",
@@ -75,7 +78,7 @@ function DayLedgerComponent({ dayKey, sessions, tasks, interruptions }: DayLedge
                 <span className={`session-outcome outcome-${session.outcome}`}>
                   {session.outcome}
                 </span>
-                <span>{minutes(session.durationSeconds)}m</span>
+                <span>{getSessionMinutes(session.durationSeconds)}m</span>
               </div>
             ))
           )}

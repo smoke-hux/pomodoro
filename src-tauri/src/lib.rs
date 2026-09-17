@@ -5,7 +5,7 @@ mod storage;
 
 use std::{
     sync::{
-        atomic::{AtomicI64, AtomicI8, Ordering},
+        atomic::{AtomicI64, AtomicI8, AtomicU8, Ordering},
         Arc, Condvar, Mutex, OnceLock,
     },
     thread,
@@ -48,7 +48,11 @@ struct RuntimeState {
     wake_lock: Mutex<()>,
     /// The tray's start/pause item and the label it currently shows, set once
     /// the tray is built. Kept so the item can say what it will do.
-    tray_toggle: OnceLock<(MenuItem<tauri::Wry>, Mutex<&'static str>)>,
+    tray_toggle: OnceLock<MenuItem<tauri::Wry>>,
+    /// Indexes into [`TOGGLE_LABELS`]: what the item should say, recorded under
+    /// the data lock, and what it says, touched only on the main thread.
+    tray_wanted: AtomicU8,
+    tray_shown: AtomicU8,
 }
 
 /// While a phase is counting down the thread wakes at least this often, so a
@@ -164,58 +168,109 @@ fn notify_boundary(app: &AppHandle, completed: Phase, snapshot: &AppData) {
     let _ = app.notification().builder().title(title).body(body).show();
 }
 
+/// The labels the tray's start/pause item can carry, indexed by
+/// [`toggle_label_index`].
+const TOGGLE_LABELS: [&str; 4] = ["Start focus", "Start break", "Pause", "Resume"];
+
 /// What the tray's start/pause item will do if clicked now. It used to read
 /// "Start / Pause" whatever the timer was doing, and the tray is exactly where
 /// the window is not there to show which one applies.
-fn toggle_label(status: TimerStatus, phase: Phase) -> &'static str {
+fn toggle_label_index(status: TimerStatus, phase: Phase) -> u8 {
     match (status, phase) {
-        (TimerStatus::Running, _) => "Pause",
-        (TimerStatus::Paused, _) => "Resume",
-        (TimerStatus::Idle, Phase::Focus) => "Start focus",
-        (TimerStatus::Idle, Phase::ShortBreak | Phase::LongBreak) => "Start break",
+        (TimerStatus::Idle, Phase::Focus) => 0,
+        (TimerStatus::Idle, Phase::ShortBreak | Phase::LongBreak) => 1,
+        (TimerStatus::Running, _) => 2,
+        (TimerStatus::Paused, _) => 3,
+    }
+}
+
+#[cfg(test)]
+fn toggle_label(status: TimerStatus, phase: Phase) -> &'static str {
+    TOGGLE_LABELS[usize::from(toggle_label_index(status, phase))]
+}
+
+impl RuntimeState {
+    /// Takes the snapshot to broadcast and, in the same breath, records the
+    /// label the tray should carry.
+    ///
+    /// Must be called with the data lock held, which is what `data` proves:
+    /// the record is then written in the same order the state changed in, and
+    /// [`sync_tray`] can read it without the lock. Reading the state there
+    /// instead made the GTK main thread wait on a mutex that other threads
+    /// hold across a disk write and a `gsettings` call.
+    fn snapshot(&self, data: &AppData, now_ms: i64) -> AppData {
+        self.tray_wanted.store(
+            toggle_label_index(data.timer.status, data.timer.phase),
+            Ordering::SeqCst,
+        );
+        data.snapshot(now_ms)
     }
 }
 
 /// Relabels the tray item when the label needs to change.
 ///
-/// The relabelling itself always runs on the main thread and works the label
-/// out there, from the state as it is at that moment, not from the snapshot
-/// that prompted it. Two threads can ask at nearly the same time — the timer
-/// thread at a phase end, the main thread on a click — and if each carried
-/// its own label across, the older one could land last and stay until the next
-/// transition. Run in one place and read late, whichever runs last is right.
-fn sync_tray(app: &AppHandle, snapshot: &AppData) {
+/// The relabelling always runs on the main thread and takes the label from
+/// the record at that moment, not from the snapshot that prompted it. Two
+/// threads can ask at nearly the same time — the timer thread at a phase end,
+/// the main thread on a click — and if each carried its own label across, the
+/// older one could land last and stay until the next transition. Run in one
+/// place and read late, whichever runs last is right.
+///
+/// Reading late once was still not enough, which is why the relabelling is
+/// [`settle_tray`]'s loop. See there for the pause-then-resume that left
+/// "Resume" on a running timer.
+fn sync_tray(app: &AppHandle) {
     let state = app.state::<RuntimeState>();
-    let Some((_, shown)) = state.tray_toggle.get() else {
+    if state.tray_toggle.get().is_none() {
         return;
-    };
+    }
     // Most publishes are a task edit or a filed notification, not a timer
     // transition; those stop here without troubling the main thread.
-    let label = toggle_label(snapshot.timer.status, snapshot.timer.phase);
-    if shown.lock().map(|shown| *shown == label).unwrap_or(true) {
+    if state.tray_wanted.load(Ordering::SeqCst) == state.tray_shown.load(Ordering::SeqCst) {
         return;
     }
 
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         let state = handle.state::<RuntimeState>();
-        let Some((item, shown)) = state.tray_toggle.get() else {
+        let Some(item) = state.tray_toggle.get() else {
             return;
         };
-        let Ok(label) = state
-            .data
-            .lock()
-            .map(|data| toggle_label(data.timer.status, data.timer.phase))
-        else {
-            return;
-        };
-        let Ok(mut shown) = shown.lock() else {
-            return;
-        };
-        if *shown != label && item.set_text(label).is_ok() {
-            *shown = label;
-        }
+        settle_tray(&state.tray_wanted, &state.tray_shown, |index| {
+            item.set_text(TOGGLE_LABELS[usize::from(index)]).is_ok()
+        });
     });
+}
+
+/// Applies the wanted label until the label shown is the label wanted.
+///
+/// This used to read `wanted` once, relabel, and record what it had shown.
+/// Relabelling takes time, and `shown` is only updated after it. With "Pause"
+/// showing, a pause asked for "Resume" and the relabelling began; a resume
+/// then asked for "Pause" again, and its publish compared that against
+/// `shown` — still "Pause", the relabelling not having finished — and took
+/// [`sync_tray`]'s fast path out. The relabelling then finished and recorded
+/// "Resume", on a running timer, until some later publish happened to differ.
+///
+/// So after recording what was shown, `wanted` is read again, and a change
+/// that arrived in the meantime is applied too. Only the main thread writes
+/// `shown`, so the loop ends as soon as nobody is racing it. An `apply` that
+/// fails ends it as well, with `shown` untouched: the next publish tries
+/// again, where retrying here would spin on a tray that is not answering.
+///
+/// The orderings are `SeqCst` on both atomics, everywhere, because this is
+/// two threads each writing one value and then reading the other. Under
+/// anything weaker each may miss the other's write — the publisher sees the
+/// old `shown` and leaves, the loop sees the old `wanted` and stops — which
+/// is the same lost update by another road.
+fn settle_tray(wanted: &AtomicU8, shown: &AtomicU8, mut apply: impl FnMut(u8) -> bool) {
+    loop {
+        let target = wanted.load(Ordering::SeqCst);
+        if shown.load(Ordering::SeqCst) == target || !apply(target) {
+            return;
+        }
+        shown.store(target, Ordering::SeqCst);
+    }
 }
 
 /// Broadcasts the new state to the window. This is the one channel through
@@ -223,7 +278,7 @@ fn sync_tray(app: &AppHandle, snapshot: &AppData) {
 /// each change is serialised and sent once, not twice.
 fn publish(app: &AppHandle, snapshot: &AppData) {
     let _ = app.emit("state-changed", snapshot);
-    sync_tray(app, snapshot);
+    sync_tray(app);
 }
 
 /// Files an observed notification, persists it and broadcasts the new state.
@@ -249,7 +304,7 @@ fn record_notification(app: &AppHandle, event: notifications::NotifyEvent) {
     {
         return;
     }
-    let snapshot = data.snapshot(now);
+    let snapshot = state.snapshot(&data, now);
     drop(data);
     // The write is deferred; the UI is not. A notification appears in the inbox
     // the moment it is filed, and reaches disk within NOTIFICATION_FLUSH_MS.
@@ -270,7 +325,7 @@ fn report_capture_status(app: &AppHandle, status: CaptureStatus) {
         return;
     }
     data.capture_status = status;
-    let snapshot = data.snapshot(now_ms());
+    let snapshot = state.snapshot(&data, now_ms());
     drop(data);
     publish(app, &snapshot);
 }
@@ -343,7 +398,7 @@ fn advance(state: &RuntimeState, app: &AppHandle) -> Result<(), String> {
     }
     state.store.save(&data)?;
     state.clear_notifications_dirty();
-    let snapshot = data.snapshot(now);
+    let snapshot = state.snapshot(&data, now);
     drop(data);
 
     publish(app, &snapshot);
@@ -365,7 +420,7 @@ where
     state.store.save(&data)?;
     // The write above covers everything, captured notifications included.
     state.clear_notifications_dirty();
-    let snapshot = data.snapshot(now);
+    let snapshot = state.snapshot(&data, now);
     drop(data);
 
     // The timer may have started, stopped or moved; the sleeping thread needs
@@ -398,7 +453,7 @@ fn toggle_timer_impl(state: &RuntimeState, app: &AppHandle) -> Result<(), String
 fn get_snapshot(state: State<'_, RuntimeState>, app: AppHandle) -> Result<AppData, String> {
     advance(&state, &app)?;
     let data = lock_data(&state)?;
-    Ok(data.snapshot(now_ms()))
+    Ok(state.snapshot(&data, now_ms()))
 }
 
 #[tauri::command]
@@ -699,13 +754,16 @@ fn show_main_window(app: &AppHandle) {
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show Pomodoro", true, None::<&str>)?;
     let state = app.state::<RuntimeState>();
-    let label = state
+    let index = state
         .data
         .lock()
-        .map(|data| toggle_label(data.timer.status, data.timer.phase))
-        .unwrap_or("Start / Pause");
+        .map(|data| toggle_label_index(data.timer.status, data.timer.phase))
+        .unwrap_or(0);
+    state.tray_wanted.store(index, Ordering::SeqCst);
+    state.tray_shown.store(index, Ordering::SeqCst);
+    let label = TOGGLE_LABELS[usize::from(index)];
     let toggle = MenuItem::with_id(app, "toggle", label, true, None::<&str>)?;
-    let _ = state.tray_toggle.set((toggle.clone(), Mutex::new(label)));
+    let _ = state.tray_toggle.set(toggle.clone());
     let skip = MenuItem::with_id(app, "skip", "Skip interval", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -752,13 +810,7 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             let store = Store::new(data_dir);
-            let data = match store.load() {
-                Ok(data) => data,
-                Err(error) => {
-                    eprintln!("{error}; starting with an empty local data set");
-                    AppData::default()
-                }
-            };
+            let data = store.load_or_set_aside(now_ms());
             let capture_enabled = data.settings.notification_filter.enabled;
             app.manage(RuntimeState {
                 data: Mutex::new(data),
@@ -769,6 +821,8 @@ pub fn run() {
                 wake: Condvar::new(),
                 wake_lock: Mutex::new(()),
                 tray_toggle: OnceLock::new(),
+                tray_wanted: AtomicU8::new(0),
+                tray_shown: AtomicU8::new(0),
             });
             build_tray(app)?;
 
@@ -850,6 +904,54 @@ mod tray {
             toggle_label(TimerStatus::Idle, Phase::LongBreak),
             "Start break"
         );
+    }
+
+    /// The pause-then-resume race, with the resume landing while the first
+    /// relabelling is still under way — after its publish has already compared
+    /// against the old `shown` and left.
+    #[test]
+    fn a_label_wanted_during_a_relabelling_is_applied_too() {
+        let wanted = AtomicU8::new(3);
+        let shown = AtomicU8::new(2);
+        let mut applied = Vec::new();
+
+        settle_tray(&wanted, &shown, |index| {
+            if applied.is_empty() {
+                wanted.store(2, Ordering::SeqCst);
+            }
+            applied.push(index);
+            true
+        });
+
+        assert_eq!(applied, [3, 2], "the final label is applied last");
+        assert_eq!(
+            shown.load(Ordering::SeqCst),
+            wanted.load(Ordering::SeqCst),
+            "the tray ends on what is wanted"
+        );
+    }
+
+    #[test]
+    fn a_tray_that_will_not_relabel_is_asked_once_and_not_recorded() {
+        let wanted = AtomicU8::new(3);
+        let shown = AtomicU8::new(2);
+        let mut asked = 0;
+
+        settle_tray(&wanted, &shown, |_| {
+            asked += 1;
+            false
+        });
+
+        assert_eq!(asked, 1);
+        // Still unequal, so the next publish gets past the fast path.
+        assert_eq!(shown.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_tray_already_showing_what_is_wanted_is_left_alone() {
+        let wanted = AtomicU8::new(1);
+        let shown = AtomicU8::new(1);
+        settle_tray(&wanted, &shown, |_| panic!("nothing to apply"));
     }
 }
 
