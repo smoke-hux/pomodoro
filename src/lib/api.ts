@@ -46,6 +46,8 @@ export const api = {
     command("convert_interruption_to_task", { id }),
   updateSettings: (settings: Settings) =>
     command("update_settings", { settings }),
+  /** Plays the interval-finished sound once, whatever the sound setting says. */
+  previewSound: () => command("preview_sound"),
   clearHistory: () => command("clear_history"),
   triageNotification: (id: string, triaged: boolean) =>
     command("triage_notification", { id, triaged }),

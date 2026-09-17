@@ -42,7 +42,7 @@
     ],
     "linux": {
       "deb": {
-        "depends": []
+        "depends": ["gnome-session-canberra | pipewire-bin"]
       }
     }
   }

@@ -21,6 +21,7 @@ function renderDialog(overrides: Partial<Parameters<typeof SettingsDialog>[0]> =
     notificationCount: 0,
     onClose: vi.fn(),
     onSave: vi.fn(async () => true),
+    onPreviewSound: vi.fn(),
     onClearHistory: vi.fn(async () => {}),
     onClearNotifications: vi.fn(async () => {}),
     ...overrides,
@@ -243,5 +244,20 @@ describe("keyboard", () => {
 
     fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(save);
+  });
+});
+
+describe("sound", () => {
+  it("can be heard before it is relied on, without saving or closing anything", () => {
+    const onPreviewSound = vi.fn();
+    const onSave = vi.fn<(next: Settings) => Promise<boolean>>(async () => true);
+    const onClose = vi.fn();
+    renderDialog({ onPreviewSound, onSave, onClose });
+
+    fireEvent.click(screen.getByRole("button", { name: "Test sound" }));
+    expect(onPreviewSound).toHaveBeenCalledTimes(1);
+    // A plain button, not a submit: trying the sound must not save the draft.
+    expect(onSave).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });
