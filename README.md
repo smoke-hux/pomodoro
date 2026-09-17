@@ -6,14 +6,15 @@ Pomodoro is a local-first focus timer for Ubuntu. It follows the Pomodoro Techni
 
 - A 25-minute focus, 5-minute short-break, and 15-minute long-break cycle by default
 - Configurable durations, round count, automatic transitions, notifications, sound, and theme
-- A task list with focus-session estimates and completed-session counts
+- A task list with focus-session estimates and completed-session counts; tasks can be edited, and finished ones are grouped into today and earlier
 - A warning when a task is estimated above four sessions, encouraging smaller steps
 - Fast interruption capture that does not stop the timer
 - Optional desktop notification capture, so what other apps send during a focus interval is read afterwards
-- A daily session ledger with planned capacity, completed focus time, and interruptions
+- A daily session ledger with planned capacity, completed focus time, and interruptions, which rolls over at midnight even if the window has been open since yesterday
 - Accurate absolute deadlines across minimized windows, screen locks, and laptop suspend
-- Local JSON persistence, system-tray controls, and single-instance behavior
-- Keyboard navigation, high-contrast support, reduced-motion support, and light/dark themes that follow the desktop's appearance setting live, or stay fixed (toolbar button, or Settings → Appearance)
+- Local JSON persistence, single-instance behavior, and system-tray controls that name what they will do (Start focus, Pause, Resume)
+- Light and dark themes that follow the desktop's appearance setting live, or stay fixed
+- Keyboard navigation, high-contrast support, and reduced-motion support
 
 Pomodoro is a standalone app. It does not require an account, use cloud sync, or send task data anywhere.
 
@@ -36,7 +37,17 @@ This local package was built on Ubuntu 24.04 x86_64 and is directly verified for
 5. After four completed focus sessions, take the longer restorative break.
 6. Review the Today ledger to compare the plan with completed work.
 
-The Space key starts, pauses, and resumes the active timer. Ctrl+N adds a task. Ctrl+1, Ctrl+2, and Ctrl+3 choose focus, short break, or long break while idle. Ctrl+, opens settings.
+The Space key starts, pauses, and resumes the active timer. Ctrl+N adds a task. Ctrl+1, Ctrl+2, and Ctrl+3 choose focus, short break, or long break while idle. Ctrl+, opens settings. Escape closes whatever is innermost: an open menu, then a dialog, then the task sidebar.
+
+### Tasks
+
+The ⋯ menu on a task has **Edit**, for its title and estimate, and **Delete**. Several tasks can be open for editing at once, and a change the app refuses leaves the form open with what you typed.
+
+Ticking a task moves it under **Completed today**. Tasks finished on an earlier day sit under **Completed earlier**. Either can be reopened, or deleted with the bin icon, which asks once first. Deleting a task removes its session count; the sessions already recorded in the ledger stay.
+
+### Theme
+
+The button beside the settings gear steps through **System**, **Light** and **Dark** and saves at once; the same choice is under Settings → Appearance. On System, Pomodoro follows the desktop's appearance setting — GNOME's Dark style switch — and repaints while it is open, without a restart. The last theme used is applied before the window first paints, so launching never flashes the wrong one.
 
 ## Desktop notification capture
 
@@ -80,18 +91,21 @@ Required Ubuntu packages:
 
     sudo apt install libwebkit2gtk-4.1-dev build-essential file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 
-Install project dependencies and run the checks:
+Install project dependencies and run the checks. These are the same steps CI runs on every pull request, so running all of them first avoids a red build:
 
     npm install
-    npm test
     npm run build
-    cargo test --manifest-path src-tauri/Cargo.toml
+    npm test
+    cd src-tauri
+    cargo fmt --all --check
+    cargo clippy --all-targets -- -D warnings
+    cargo test
 
 Some checks need a real GNOME session — a session bus, a notification daemon,
 and `gsettings` — so they are marked `#[ignore]` and skipped by CI. Run them on
-an Ubuntu desktop:
+an Ubuntu desktop, from `src-tauri`:
 
-    cargo test --manifest-path src-tauri/Cargo.toml -- --ignored --nocapture
+    cargo test -- --ignored --nocapture
 
 They cover capture against the live bus, a notification arriving mid-focus
 being filed without disturbing the timer, Pomodoro's own alerts staying out of
@@ -102,6 +116,10 @@ or leave the desktop's banner setting changed.
 Run the desktop app in development:
 
     npm run tauri dev
+
+Opening `npm run dev` in a browser shows the interface with sample data and no backend. The theme button works there; everything that saves does not.
+
+`public/theme-init.js` is the one script outside the bundle. It applies the remembered theme before the first paint, and it is a file rather than an inline script because the content security policy only allows the app's own scripts.
 
 Build a Debian package:
 
