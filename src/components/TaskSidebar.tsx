@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   CheckCircle2,
@@ -43,6 +43,9 @@ interface TaskSidebarProps {
   onDeleteNotification: (id: string) => void;
   onOpenSettings: () => void;
 }
+
+/** How long "Delete task?" ignores presses after appearing. Longer than a double click. */
+const CONFIRM_ARMING_MS = 600;
 
 interface TaskComposerProps {
   /** Prefixes the field ids, so the add and edit forms never share one. */
@@ -176,16 +179,36 @@ function TaskSidebarComponent({
   onOpenSettings,
 }: TaskSidebarProps) {
   const [adding, setAdding] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  // A set, not one id: with a single editor, choosing Edit on a second row
+  // unmounted the first and threw away whatever had been typed into it.
+  const [editingIds, setEditingIds] = useState<ReadonlySet<string>>(() => new Set());
+  // When the confirm button appeared; see the click handler.
+  const confirmShownAt = useRef(0);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const openTasks = tasks.filter((task) => !task.done);
   // The heading says "today", so it lists today. Tasks finished on an earlier
   // day used to pile up under it for good, with no way to remove them.
-  const completedToday = tasks.filter(
-    (task) => task.done && task.completedAt !== null && getLocalDateKey(task.completedAt) === dayKey,
-  );
-  const completedEarlier = tasks.filter((task) => task.done && !completedToday.includes(task));
+  const { openTasks, completedToday, completedEarlier } = useMemo(() => {
+    const open: FocusTask[] = [];
+    const today: FocusTask[] = [];
+    const earlier: FocusTask[] = [];
+    for (const task of tasks) {
+      if (!task.done) open.push(task);
+      else if (task.completedAt !== null && getLocalDateKey(task.completedAt) === dayKey) today.push(task);
+      else earlier.push(task);
+    }
+    return { openTasks: open, completedToday: today, completedEarlier: earlier };
+  }, [tasks, dayKey]);
+
+  // An editor whose task was completed or deleted elsewhere is over; without
+  // this it would come back, with the old text, if the task were reopened.
+  useEffect(() => {
+    setEditingIds((current) => {
+      const open = new Set(openTasks.map((task) => task.id));
+      const kept = [...current].filter((id) => open.has(id));
+      return kept.length === current.size ? current : new Set(kept);
+    });
+  }, [openTasks]);
   const openInterruptions = interruptions.filter((item) => !item.handled);
 
   // Ctrl+N raises this counter. Reacting to it keeps the shortcut owned by the
@@ -221,7 +244,11 @@ function TaskSidebarComponent({
   // focus. When the editor closes, focus goes back to that row rather than
   // dropping to <body> and restarting Tab from the top of the window.
   const stopEditing = (id: string) => {
-    setEditingId(null);
+    setEditingIds((current) => {
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
     requestAnimationFrame(() => {
       for (const row of listRef.current?.querySelectorAll<HTMLElement>("[data-task-id]") ?? []) {
         if (row.dataset.taskId === id) row.querySelector<HTMLElement>(".row-menu > summary")?.focus();
@@ -255,6 +282,11 @@ function TaskSidebarComponent({
           className="row-delete confirming"
           type="button"
           onClick={() => {
+            // This button appears where the trash button was and takes focus,
+            // so the second half of a double click, or Enter held a moment too
+            // long, lands on it. An answer that arrives before the question
+            // could have been read is part of the gesture that asked it.
+            if (Date.now() - confirmShownAt.current < CONFIRM_ARMING_MS) return;
             setConfirmDeleteId(null);
             onDeleteTask(task.id);
           }}
@@ -283,7 +315,10 @@ function TaskSidebarComponent({
           <button
             className="row-delete"
             type="button"
-            onClick={() => setConfirmDeleteId(task.id)}
+            onClick={() => {
+              confirmShownAt.current = Date.now();
+              setConfirmDeleteId(task.id);
+            }}
             aria-label={`Delete ${task.title}`}
             title="Delete"
           >
@@ -334,7 +369,7 @@ function TaskSidebarComponent({
             </button>
           ) : (
             openTasks.map((task) =>
-              task.id === editingId ? (
+              editingIds.has(task.id) ? (
                 <div role="listitem" key={task.id}>
                   <TaskComposer
                     idPrefix={`edit-${task.id}`}
@@ -383,7 +418,10 @@ function TaskSidebarComponent({
                       <MoreHorizontal aria-hidden="true" size={17} />
                     </summary>
                     <div className="menu-popover">
-                      <button type="button" onClick={() => setEditingId(task.id)}>
+                      <button
+                        type="button"
+                        onClick={() => setEditingIds((current) => new Set(current).add(task.id))}
+                      >
                         <Pencil aria-hidden="true" size={15} /> Edit
                       </button>
                       <button type="button" onClick={() => onDeleteTask(task.id)}>

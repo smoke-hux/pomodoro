@@ -6,7 +6,7 @@ import { getCompletedFocusCount, getCompletedFocusMinutes, getLocalDateKey } fro
 import { applyTheme, nextTheme, resolveTheme, useSystemDark } from "./lib/theme";
 import { useCountdown } from "./lib/useCountdown";
 import { useDayKey } from "./lib/useDayKey";
-import { useRowMenus } from "./lib/useRowMenus";
+import { closeRowMenus, useRowMenus } from "./lib/useRowMenus";
 import { defaultSnapshot } from "./types";
 import type { AppSnapshot, Phase, Settings, ThemePreference } from "./types";
 import { TaskSidebar } from "./components/TaskSidebar";
@@ -201,6 +201,10 @@ export default function App() {
   // Without this, dismissing a capture with Escape drops focus to <body> and
   // the next Tab restarts from the top of the toolbar.
   const openDialog = useCallback((open: (value: boolean) => void) => {
+    // A menu opened from the keyboard is still open when a shortcut opens a
+    // dialog — no pointer press has happened to close it — and would sit
+    // behind the modal, out of Escape's reach, still acting on its row.
+    closeRowMenus();
     returnFocusRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     open(true);
@@ -268,10 +272,16 @@ export default function App() {
     const unlisten = listen<AppSnapshot>("state-changed", (event) => {
       if (cancelled) return;
       let hasNewCompletion = false;
+      // If the initial read failed, the first broadcast is the baseline: every
+      // session in it is history, not something that just completed. Without
+      // this the baseline was never set on that path and the chime stayed
+      // silent for the life of the window.
+      const isBaseline = !hasSessionBaseline.current;
+      hasSessionBaseline.current = true;
       for (const session of event.payload.sessions) {
         if (knownSessionIds.current.has(session.id)) continue;
         knownSessionIds.current.add(session.id);
-        if (hasSessionBaseline.current && session.outcome === "completed") {
+        if (!isBaseline && session.outcome === "completed") {
           hasNewCompletion = true;
         }
       }
@@ -298,7 +308,7 @@ export default function App() {
   // Not before the stored settings have arrived — and not at all if they never
   // do: until then the snapshot holds the default, and applying that would
   // repaint a Dark user's window as System and overwrite the remembered choice
-  // that main.tsx painted the first frame with.
+  // that public/theme-init.js painted the first frame with.
   const systemDark = useSystemDark();
   const theme = snapshot.settings.theme;
   useEffect(() => {
@@ -443,9 +453,12 @@ export default function App() {
     void run(
       () => api.updateSettings({ ...settings, theme: next }),
       `Theme: ${themeLabels[next]}.`,
-    ).then((saved) => {
-      // A failure withdraws its own request, not a later one made since.
-      if (!saved && requestedTheme.current === next) requestedTheme.current = null;
+    ).then(() => {
+      // Saved or refused, this request is over — unless a later click has
+      // replaced it. The effect above cannot be the only thing that settles
+      // it: three quick clicks end on the theme they started from, the
+      // broadcasts can land in one render, and nothing is seen to change.
+      if (requestedTheme.current === next) requestedTheme.current = null;
     });
   }, [inTauri, run, settings, settingsLoaded]);
 

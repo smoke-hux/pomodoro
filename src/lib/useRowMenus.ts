@@ -61,6 +61,11 @@ function position(menu: HTMLDetailsElement) {
   menu.dataset.placed = "";
 }
 
+/** Closes every open row menu. For when something modal takes over the window. */
+export function closeRowMenus() {
+  closeAll();
+}
+
 function closeAll(except?: Node | null) {
   for (const menu of document.querySelectorAll<HTMLDetailsElement>(`${MENU_SELECTOR}[open]`)) {
     if (!except || !menu.contains(except)) menu.open = false;
@@ -83,25 +88,45 @@ export function useRowMenus() {
     // was placed against, the menu closes rather than sit beside another row
     // while still acting on the first.
     let watcher: MutationObserver | null = null;
+    let frame: number | null = null;
     const unwatch = () => {
       watcher?.disconnect();
       watcher = null;
+      if (frame !== null) cancelAnimationFrame(frame);
+      frame = null;
     };
     const watch = (menu: HTMLDetailsElement) => {
       unwatch();
       const button = menu.querySelector("summary");
       if (!button) return;
       const placedAt = button.getBoundingClientRect();
-      watcher = new MutationObserver(() => {
-        const now = button.getBoundingClientRect();
-        const moved =
-          Math.abs(now.top - placedAt.top) > 1 || Math.abs(now.right - placedAt.right) > 1;
-        if (moved || !menu.isConnected) {
-          menu.open = false;
-          unwatch();
-        }
+      const observer = new MutationObserver(() => {
+        // The countdown changes the page every second. Measuring in the next
+        // frame, once, rides on the layout the browser is about to do anyway
+        // rather than forcing one per mutation.
+        if (frame !== null) return;
+        frame = requestAnimationFrame(() => {
+          frame = null;
+          if (watcher !== observer) return;
+          const now = button.getBoundingClientRect();
+          const moved =
+            Math.abs(now.top - placedAt.top) > 1 || Math.abs(now.right - placedAt.right) > 1;
+          if (moved || !menu.isConnected) {
+            menu.open = false;
+            unwatch();
+          }
+        });
       });
-      watcher.observe(document.body, { childList: true, subtree: true, characterData: true });
+      watcher = observer;
+      // Rows are also moved by attributes alone: a group above expanding
+      // (`open`), a section collapsing by class.
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: ["class", "open", "hidden"],
+      });
     };
 
     // `toggle` does not bubble; capturing sees it for every menu.

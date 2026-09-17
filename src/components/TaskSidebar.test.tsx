@@ -95,6 +95,20 @@ describe("editing a task", () => {
   });
 });
 
+describe("editing two tasks", () => {
+  it("keeps the first draft when a second row is opened for editing", () => {
+    renderSidebar([task(), task({ id: "task-2", title: "Review notes" })]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+    fireEvent.change(screen.getByLabelText("Task"), { target: { value: "Half-typed title" } });
+
+    // The remaining row's menu: a single editor used to be replaced here.
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    const titles = (screen.getAllByLabelText("Task") as HTMLInputElement[]).map((input) => input.value);
+    expect(titles).toEqual(["Half-typed title", "Review notes"]);
+  });
+});
+
 describe("completed tasks", () => {
   it("lists under Completed today only what was completed today", () => {
     renderSidebar([
@@ -110,12 +124,38 @@ describe("completed tasks", () => {
     const { onDeleteTask } = renderSidebar([
       task({ id: "b", title: "Done last week", done: true, completedAt: NOW - 6 * DAY }),
     ]);
-    // One stray click next to "reopen" must not remove the record.
-    fireEvent.click(screen.getByRole("button", { name: "Delete Done last week" }));
-    expect(onDeleteTask).not.toHaveBeenCalled();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+    try {
+      // One stray click next to "reopen" must not remove the record.
+      fireEvent.click(screen.getByRole("button", { name: "Delete Done last week" }));
+      expect(onDeleteTask).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: /Confirm deleting Done last week/ }));
-    expect(onDeleteTask).toHaveBeenCalledWith("b");
+      clock.mockReturnValue(NOW + 1_000);
+      fireEvent.click(screen.getByRole("button", { name: /Confirm deleting Done last week/ }));
+      expect(onDeleteTask).toHaveBeenCalledWith("b");
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("is not deleted by the second half of the double click that asked", () => {
+    // The confirm button appears under the pointer and takes focus, so a double
+    // click, or Enter held a moment too long, used to answer its own question.
+    const { onDeleteTask } = renderSidebar([
+      task({ id: "b", title: "Done last week", done: true, completedAt: NOW - 6 * DAY }),
+    ]);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Delete Done last week" }));
+      clock.mockReturnValue(NOW + 180);
+      fireEvent.click(screen.getByRole("button", { name: /Confirm deleting/ }));
+
+      expect(onDeleteTask).not.toHaveBeenCalled();
+      // Still asking, so a deliberate answer is still possible.
+      expect(screen.getByRole("button", { name: /Confirm deleting/ })).toBeTruthy();
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("stands down when the confirmation is left alone", () => {
