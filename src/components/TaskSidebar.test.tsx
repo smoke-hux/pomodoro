@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TaskSidebar } from "./TaskSidebar";
 import { getLocalDateKey } from "../lib/metrics";
@@ -106,11 +106,35 @@ describe("completed tasks", () => {
     expect(screen.getByText("Completed earlier (1)")).toBeTruthy();
   });
 
-  it("can be deleted, so finished work does not pile up for good", () => {
+  it("can be deleted, but only after asking once", () => {
     const { onDeleteTask } = renderSidebar([
       task({ id: "b", title: "Done last week", done: true, completedAt: NOW - 6 * DAY }),
     ]);
+    // One stray click next to "reopen" must not remove the record.
     fireEvent.click(screen.getByRole("button", { name: "Delete Done last week" }));
+    expect(onDeleteTask).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /Confirm deleting Done last week/ }));
     expect(onDeleteTask).toHaveBeenCalledWith("b");
+  });
+
+  it("stands down when the confirmation is left alone", () => {
+    const { onDeleteTask } = renderSidebar([
+      task({ id: "b", title: "Done last week", done: true, completedAt: NOW - 6 * DAY }),
+    ]);
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Delete Done last week" }));
+      // Losing focus is not a cancel: WebKit blurs a button as it is pressed.
+      fireEvent.blur(screen.getByRole("button", { name: /Confirm deleting/ }));
+      expect(screen.getByRole("button", { name: /Confirm deleting/ })).toBeTruthy();
+      act(() => void vi.advanceTimersByTime(4_000));
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(screen.queryByRole("button", { name: /Confirm deleting/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Delete Done last week" })).toBeTruthy();
+    expect(onDeleteTask).not.toHaveBeenCalled();
   });
 });

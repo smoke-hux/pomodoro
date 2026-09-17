@@ -408,16 +408,30 @@ export default function App() {
 
   // The toolbar button steps System → Light → Dark and saves at once. It sends
   // the settings as last received, never the settings dialog's unsaved draft.
+  //
+  // The saved theme only comes back with the next broadcast, so a second click
+  // inside that gap steps on from the theme already asked for, not from the one
+  // still on screen — otherwise two quick clicks both ask for the same thing.
   const settings = snapshot.settings;
+  const requestedTheme = useRef<ThemePreference | null>(null);
+  useEffect(() => {
+    requestedTheme.current = null;
+  }, [settings.theme]);
   const cycleTheme = useCallback(() => {
-    const next = nextTheme(settings.theme);
+    const next = nextTheme(requestedTheme.current ?? settings.theme);
     if (!inTauri) {
       // The browser preview has no backend to save to; the theme is the one
       // setting worth previewing anyway.
       setSnapshot((current) => ({ ...current, settings: { ...current.settings, theme: next } }));
       return;
     }
-    void run(() => api.updateSettings({ ...settings, theme: next }), `Theme: ${themeLabels[next]}.`);
+    requestedTheme.current = next;
+    void run(
+      () => api.updateSettings({ ...settings, theme: next }),
+      `Theme: ${themeLabels[next]}.`,
+    ).then((saved) => {
+      if (!saved) requestedTheme.current = null;
+    });
   }, [inTauri, run, settings]);
 
   useRowMenus();

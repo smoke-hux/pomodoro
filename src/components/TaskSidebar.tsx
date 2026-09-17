@@ -177,6 +177,8 @@ function TaskSidebarComponent({
 }: TaskSidebarProps) {
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const openTasks = tasks.filter((task) => !task.done);
   // The heading says "today", so it lists today. Tasks finished on an earlier
   // day used to pile up under it for good, with no way to remove them.
@@ -193,6 +195,26 @@ function TaskSidebarComponent({
     if (addRequest > 0) setAdding(true);
   }, [addRequest]);
 
+  // A completed row's delete is a single small button beside "reopen", so it
+  // asks once, the way Skip does, and stands down by itself if left alone.
+  useEffect(() => {
+    if (confirmDeleteId === null) return;
+    const timeout = window.setTimeout(() => setConfirmDeleteId(null), 4_000);
+    return () => window.clearTimeout(timeout);
+  }, [confirmDeleteId]);
+
+  // Opening the editor replaces the row, and with it the menu button that had
+  // focus. When the editor closes, focus goes back to that row rather than
+  // dropping to <body> and restarting Tab from the top of the window.
+  const stopEditing = (id: string) => {
+    setEditingId(null);
+    requestAnimationFrame(() => {
+      for (const row of listRef.current?.querySelectorAll<HTMLElement>("[data-task-id]") ?? []) {
+        if (row.dataset.taskId === id) row.querySelector<HTMLElement>(".row-menu > summary")?.focus();
+      }
+    });
+  };
+
   const submitNew = async (title: string, estimate: number) => {
     const accepted = await onAddTask(title, estimate);
     if (accepted) setAdding(false);
@@ -200,7 +222,10 @@ function TaskSidebarComponent({
   };
 
   const completedRow = (task: FocusTask) => (
-    <div className="task-row completed" key={task.id}>
+    <div
+      className={`task-row completed${confirmDeleteId === task.id ? " confirming" : ""}`}
+      key={task.id}
+    >
       <button
         className="task-check"
         type="button"
@@ -210,18 +235,41 @@ function TaskSidebarComponent({
         <CheckCircle2 aria-hidden="true" size={17} />
       </button>
       <span className="completed-title">{task.title}</span>
-      <span className="task-count">
-        {task.completedPomodoros} / {task.estimate}
-      </span>
-      <button
-        className="row-delete"
-        type="button"
-        onClick={() => onDeleteTask(task.id)}
-        aria-label={`Delete ${task.title}`}
-        title="Delete"
-      >
-        <Trash2 aria-hidden="true" size={15} />
-      </button>
+      {confirmDeleteId === task.id ? (
+        <button
+          className="row-delete confirming"
+          type="button"
+          onClick={() => {
+            setConfirmDeleteId(null);
+            onDeleteTask(task.id);
+          }}
+          // No cancel-on-blur: WebKit does not keep focus on a button being
+          // clicked, so the press itself blurred this and withdrew the
+          // confirmation before the click could land. The timeout stands in.
+          // The button it replaces had focus; without this a keyboard user
+          // would be dropped to <body> halfway through deleting.
+          autoFocus
+          aria-label={`Confirm deleting ${task.title}, including its count of ${task.completedPomodoros} completed sessions`}
+          title="Removes the task and its session count. Today's ledger keeps its sessions."
+        >
+          Delete task?
+        </button>
+      ) : (
+        <>
+          <span className="task-count">
+            {task.completedPomodoros} / {task.estimate}
+          </span>
+          <button
+            className="row-delete"
+            type="button"
+            onClick={() => setConfirmDeleteId(task.id)}
+            aria-label={`Delete ${task.title}`}
+            title="Delete"
+          >
+            <Trash2 aria-hidden="true" size={15} />
+          </button>
+        </>
+      )}
     </div>
   );
 
@@ -257,7 +305,7 @@ function TaskSidebarComponent({
           />
         )}
 
-        <div className="task-list" role="list" aria-label="Open tasks">
+        <div className="task-list" role="list" aria-label="Open tasks" ref={listRef}>
           {openTasks.length === 0 && !adding ? (
             <button className="empty-task" type="button" onClick={() => setAdding(true)}>
               <Plus aria-hidden="true" size={18} />
@@ -274,10 +322,10 @@ function TaskSidebarComponent({
                     submitLabel="Save"
                     onSubmit={async (title, estimate) => {
                       const accepted = await onUpdateTask(task.id, title, estimate);
-                      if (accepted) setEditingId(null);
+                      if (accepted) stopEditing(task.id);
                       return accepted;
                     }}
-                    onCancel={() => setEditingId(null)}
+                    onCancel={() => stopEditing(task.id)}
                   />
                 </div>
               ) : (
@@ -285,6 +333,7 @@ function TaskSidebarComponent({
                   className={`task-row ${task.id === activeTaskId ? "selected" : ""}`}
                   key={task.id}
                   role="listitem"
+                  data-task-id={task.id}
                 >
                   <button
                     className="task-check"

@@ -70,17 +70,25 @@ function closeAll(except?: Node | null) {
 /**
  * Window-level behaviour for the rows' "more actions" menus, which are plain
  * <details> elements: places each one as it opens, and closes it when the user
- * presses anywhere else — so only one is ever open — or when what it is
- * attached to moves.
+ * presses anywhere else or opens another — so only one is ever open — or when
+ * what it is attached to moves.
  */
 export function useRowMenus() {
   useEffect(() => {
     // `toggle` does not bubble; capturing sees it for every menu.
     const onToggle = (event: Event) => {
       const menu = event.target;
-      if (menu instanceof HTMLDetailsElement && menu.matches(MENU_SELECTOR) && menu.open) {
-        position(menu);
+      if (!(menu instanceof HTMLDetailsElement) || !menu.matches(MENU_SELECTOR)) return;
+      if (!menu.open) {
+        // Placed afresh on every open; until then the stylesheet keeps the
+        // popover hidden, so it is never seen where it was last time.
+        delete menu.dataset.placed;
+        return;
       }
+      // A menu opened from the keyboard arrives with no pointer press, so the
+      // one before it has to be closed here as well.
+      closeAll(menu);
+      position(menu);
     };
     const onPointerDown = (event: PointerEvent) =>
       closeAll(event.target instanceof Node ? event.target : null);
