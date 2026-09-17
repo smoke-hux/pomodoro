@@ -5,8 +5,8 @@ mod storage;
 
 use std::{
     sync::{
-        atomic::{AtomicI64, AtomicI8, AtomicU8, Ordering},
-        Arc, Condvar, Mutex, OnceLock,
+        atomic::{AtomicBool, AtomicI64, AtomicI8, AtomicU8, Ordering},
+        Arc, Condvar, Mutex, OnceLock, PoisonError,
     },
     thread,
     time::Duration,
@@ -30,11 +30,29 @@ use tauri_plugin_notification::NotificationExt;
 /// immediately; only observed notifications wait.
 const NOTIFICATION_FLUSH_MS: i64 = 2_000;
 
+/// How long to leave a store that would not save before trying it again.
+///
+/// A write that failed was retried at once: the dirty mark stayed where it was,
+/// already overdue, so [`wait_for`] answered zero and the reconciliation thread
+/// went straight round again — one core at full load, the data lock held almost
+/// without a break, and the same line written to stderr as fast as it would
+/// go, for as long as the disk stayed full. A disk that is full now is full in
+/// ten milliseconds too. Half a minute is soon enough to pick up the space
+/// somebody freed and slow enough to cost nothing.
+const SAVE_RETRY_MS: i64 = 30_000;
+
 struct RuntimeState {
     data: Mutex<AppData>,
     store: Store,
     listener: Arc<NotificationListener>,
-    /// When the oldest unsaved captured notification arrived, or 0 for none.
+    /// The time from which unsaved changes are counted as waiting, or 0 when
+    /// nothing is unsaved. A write is due [`NOTIFICATION_FLUSH_MS`] after it.
+    ///
+    /// Normally that is when the oldest unsaved captured notification arrived.
+    /// After a failed save it is set ahead of the clock by [`retry_mark`], so
+    /// the next attempt comes due [`SAVE_RETRY_MS`] later; [`wait_for`] and
+    /// [`RuntimeState::flush_notifications`] both read "due" off this one
+    /// value, and so cannot disagree about when that is.
     notifications_dirty_since: AtomicI64,
     /// The last banner state [`sync_quiet`] acted on: `1` quiet, `0` normal,
     /// `-1` not yet decided. Asking the desktop what its banner setting is
@@ -44,8 +62,19 @@ struct RuntimeState {
     /// What the reconciliation thread sleeps on. Anything that changes the
     /// timer or files a notification calls [`Self::nudge`] so the thread
     /// re-evaluates immediately instead of at its next scheduled wake-up.
+    ///
+    /// The lock holds "nudged since the thread last looked". It used to hold
+    /// nothing, and a nudge was only a `notify_all`: one that arrived after
+    /// the thread had worked out how long to sleep but before it was asleep
+    /// woke nobody and was gone. Resume a timer with five seconds left in that
+    /// gap and the thread slept its full idle half-minute; the phase ended
+    /// twenty-five seconds late. A flag set under the lock is still there
+    /// when the thread comes to wait.
     wake: Condvar,
-    wake_lock: Mutex<()>,
+    wake_lock: Mutex<bool>,
+    /// Set first thing by [`Self::shut_down`] and never cleared. From then on
+    /// nothing may silence the desktop and the reconciliation thread stops.
+    shutting_down: AtomicBool,
     /// The tray's start/pause item and the label it currently shows, set once
     /// the tray is built. Kept so the item can say what it will do.
     tray_toggle: OnceLock<MenuItem<tauri::Wry>>,
@@ -63,18 +92,103 @@ const RUNNING_WAKE: Duration = Duration::from_secs(1);
 /// nothing to do. A long ceiling rather than no ceiling, as a backstop.
 const IDLE_WAKE: Duration = Duration::from_secs(30);
 
+/// How long the reconciliation thread can sleep before something needs it.
+///
+/// Running: until the deadline, capped at [`RUNNING_WAKE`]. Idle with a
+/// pending write: until that is due. Otherwise: a long time. The old loop woke
+/// twice a second, all day, whether or not anything was counting down.
+///
+/// `dirty_since` is [`RuntimeState::notifications_dirty_since`], 0 for nothing
+/// pending. Kept free of the state so the arithmetic can be tested.
+fn wait_for(running_deadline: Option<i64>, dirty_since: i64, now_ms: i64) -> Duration {
+    if let Some(ends_at) = running_deadline {
+        let until = u64::try_from(ends_at.saturating_sub(now_ms)).unwrap_or(0);
+        return Duration::from_millis(until).min(RUNNING_WAKE);
+    }
+
+    if dirty_since != 0 {
+        let due = dirty_since.saturating_add(NOTIFICATION_FLUSH_MS);
+        let until = u64::try_from(due.saturating_sub(now_ms)).unwrap_or(0);
+        return Duration::from_millis(until).min(IDLE_WAKE);
+    }
+
+    IDLE_WAKE
+}
+
+/// The dirty mark to leave after a save failed at `now_ms`: the one that makes
+/// the next write come due [`SAVE_RETRY_MS`] from now. Never 0, which would
+/// read as "nothing to save" and forget the change altogether.
+fn retry_mark(now_ms: i64) -> i64 {
+    now_ms
+        .saturating_add(SAVE_RETRY_MS - NOTIFICATION_FLUSH_MS)
+        .max(1)
+}
+
+/// Whether the desktop's banners may be turned off right now.
+///
+/// Never once shutdown has begun. Quitting from the tray mid-focus restored
+/// the banners, but the focus was still running and so was the reconciliation
+/// thread, which could wake before the process was gone, find the desktop not
+/// quiet during a focus, and silence it again — on its way out, with nothing
+/// left alive to put it back until the next launch.
+fn may_silence(want_quiet: bool, shutting_down: bool) -> bool {
+    want_quiet && !shutting_down
+}
+
 impl RuntimeState {
-    /// Wakes the reconciliation thread.
+    fn new(data: AppData, store: Store) -> Self {
+        Self {
+            data: Mutex::new(data),
+            store,
+            listener: Arc::new(NotificationListener::new()),
+            notifications_dirty_since: AtomicI64::new(0),
+            quiet_desire: AtomicI8::new(-1),
+            wake: Condvar::new(),
+            wake_lock: Mutex::new(false),
+            shutting_down: AtomicBool::new(false),
+            tray_toggle: OnceLock::new(),
+            tray_wanted: AtomicU8::new(0),
+            tray_shown: AtomicU8::new(0),
+        }
+    }
+
+    /// Wakes the reconciliation thread, or, if it is not asleep yet, tells it
+    /// not to go to sleep.
     fn nudge(&self) {
+        // Nothing can panic while holding this lock, and a bool has no
+        // invariant a panic could have broken.
+        let mut nudged = self
+            .wake_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        *nudged = true;
         self.wake.notify_all();
     }
 
-    /// How long the reconciliation thread can sleep before something needs it.
+    /// Sleeps until nudged or until `timeout` has passed, whichever is first.
+    /// A nudge delivered since the last call counts: the wait is skipped.
     ///
-    /// Running: until the deadline, capped at [`RUNNING_WAKE`]. Idle with a
-    /// pending notification write: until that is due. Otherwise: a long time.
-    /// The old loop woke twice a second, all day, whether or not anything was
-    /// counting down.
+    /// Waking early for no reason would be harmless — the caller recomputes
+    /// everything — but `wait_timeout_while` does not do that either.
+    fn wait_for_work(&self, timeout: Duration) {
+        let mut nudged = self
+            .wake_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if !*nudged {
+            nudged = match self
+                .wake
+                .wait_timeout_while(nudged, timeout, |nudged| !*nudged)
+            {
+                Ok((guard, _)) => guard,
+                Err(poisoned) => poisoned.into_inner().0,
+            };
+        }
+        // Cleared before the lock goes, so a nudge from here on is a new one.
+        *nudged = false;
+    }
+
+    /// How long the reconciliation thread can sleep; see [`wait_for`].
     fn next_wait(&self, now_ms: i64) -> Duration {
         let running_deadline = self
             .data
@@ -82,19 +196,11 @@ impl RuntimeState {
             .ok()
             .filter(|data| data.timer.status == TimerStatus::Running)
             .and_then(|data| data.timer.ends_at);
-        if let Some(ends_at) = running_deadline {
-            let until = u64::try_from(ends_at.saturating_sub(now_ms)).unwrap_or(0);
-            return Duration::from_millis(until).min(RUNNING_WAKE);
-        }
-
-        let dirty_since = self.notifications_dirty_since.load(Ordering::Acquire);
-        if dirty_since != 0 {
-            let due = dirty_since.saturating_add(NOTIFICATION_FLUSH_MS);
-            let until = u64::try_from(due.saturating_sub(now_ms)).unwrap_or(0);
-            return Duration::from_millis(until).min(IDLE_WAKE);
-        }
-
-        IDLE_WAKE
+        wait_for(
+            running_deadline,
+            self.notifications_dirty_since.load(Ordering::Acquire),
+            now_ms,
+        )
     }
 }
 
@@ -113,9 +219,37 @@ impl RuntimeState {
         self.notifications_dirty_since.store(0, Ordering::Release);
     }
 
-    /// Writes captured notifications once they have been waiting long enough.
+    /// Writes the store, and keeps the dirty mark honest about the result:
+    /// cleared by a write that worked, since that covers everything including
+    /// captured notifications; pushed out by [`SAVE_RETRY_MS`] after one that
+    /// did not, so the change is neither forgotten nor retried in a spin.
+    ///
+    /// Takes `data` to prove the data lock is held. The mark only changes
+    /// under it, so a failed write here cannot re-arm a mark that a later,
+    /// successful write on another thread has just cleared.
+    ///
+    /// A store closed to writing answers `Ok`, and so is never retried.
+    fn save(&self, data: &AppData, now_ms: i64) -> Result<(), String> {
+        match self.store.save(data) {
+            Ok(()) => {
+                self.clear_notifications_dirty();
+                Ok(())
+            }
+            Err(error) => {
+                self.notifications_dirty_since
+                    .store(retry_mark(now_ms), Ordering::Release);
+                Err(error)
+            }
+        }
+    }
+
+    /// Writes captured notifications once they have been waiting long enough,
+    /// and anything else a failed save left behind once its retry is due.
     /// Called from the reconciliation loop, so a quiet burst still lands within
     /// a couple of seconds.
+    ///
+    /// A failure is reported once here and not tried again for
+    /// [`SAVE_RETRY_MS`]; see there for the spin this used to be.
     fn flush_notifications(&self, now_ms: i64, force: bool) {
         let dirty_since = self.notifications_dirty_since.load(Ordering::Acquire);
         if dirty_since == 0 {
@@ -127,11 +261,12 @@ impl RuntimeState {
         let Ok(data) = self.data.lock() else {
             return;
         };
-        if let Err(error) = self.store.save(&data) {
-            eprintln!("could not save captured notifications: {error}");
-            return;
+        if let Err(error) = self.save(&data, now_ms) {
+            eprintln!(
+                "could not save; trying again in {} s: {error}",
+                SAVE_RETRY_MS / 1_000
+            );
         }
-        self.clear_notifications_dirty();
     }
 }
 
@@ -335,8 +470,13 @@ fn report_capture_status(app: &AppHandle, status: CaptureStatus) {
 ///
 /// The marker holds the value to put back, so an app that is killed mid-focus
 /// leaves behind everything the next launch needs to repair the desktop.
+///
+/// Once shutdown has begun this can only ever restore; see [`may_silence`].
 fn sync_quiet(state: &RuntimeState, data: &mut AppData, now_ms: i64) -> bool {
-    let want_quiet = data.settings.silence_banners_during_focus && data.is_focus_running(now_ms);
+    let want_quiet = may_silence(
+        data.settings.silence_banners_during_focus && data.is_focus_running(now_ms),
+        state.shutting_down.load(Ordering::SeqCst),
+    );
     let desire = i8::from(want_quiet);
     if state.quiet_desire.swap(desire, Ordering::AcqRel) == desire {
         return false;
@@ -385,52 +525,125 @@ fn sync_listener(app: &AppHandle, state: &RuntimeState, enabled: bool) {
     );
 }
 
-/// Moves the timer forward to `now`, and only if a phase completed persists,
-/// broadcasts and alerts. Nothing is cloned or serialised on the common path
-/// where nothing happened, which is nearly every wake-up.
-fn advance(state: &RuntimeState, app: &AppHandle) -> Result<(), String> {
-    let now = now_ms();
-    let mut data = lock_data(state)?;
+/// What one pass over the state produced, for the caller to broadcast once
+/// the data lock is released.
+struct Change {
+    /// The state to publish, or `None` when nothing changed.
+    snapshot: Option<AppData>,
+    /// The phase that ran out during this pass, to be announced.
+    completed: Option<Phase>,
+    /// What the caller is told: the action's error if it had one, otherwise
+    /// the save's.
+    result: Result<(), String>,
+}
+
+impl Change {
+    fn nothing(result: Result<(), String>) -> Self {
+        Self {
+            snapshot: None,
+            completed: None,
+            result,
+        }
+    }
+}
+
+/// Moves the timer forward to `now`, and only if a phase completed or the
+/// banners changed hands persists and returns something to broadcast. Nothing
+/// is cloned or serialised on the common path where nothing happened, which is
+/// nearly every wake-up.
+///
+/// A save that fails does not stop the broadcast. The state in memory has
+/// already moved on and is the truth for this session; returning at the failed
+/// save left the window at 00:00 on a phase the backend had finished, with no
+/// alert, and a window reloaded at that moment got nothing at all, since
+/// `get_snapshot` came through here too. The error is still returned, after
+/// the window has been told, and the write is retried; see
+/// [`RuntimeState::save`].
+fn reconcile(state: &RuntimeState, now: i64) -> Change {
+    let mut data = match lock_data(state) {
+        Ok(data) => data,
+        Err(error) => return Change::nothing(Err(error)),
+    };
     let completed = data.tick(now);
     let quiet_changed = sync_quiet(state, &mut data, now);
     if completed.is_none() && !quiet_changed {
-        return Ok(());
+        return Change::nothing(Ok(()));
     }
-    state.store.save(&data)?;
-    state.clear_notifications_dirty();
-    let snapshot = state.snapshot(&data, now);
-    drop(data);
-
-    publish(app, &snapshot);
-    if let Some(phase) = completed {
-        notify_boundary(app, phase, &snapshot);
+    let result = state.save(&data, now);
+    Change {
+        snapshot: Some(state.snapshot(&data, now)),
+        completed,
+        result,
     }
-    Ok(())
 }
 
+/// Applies a user action to the state, after first settling a phase that ran
+/// out while the reconciliation thread slept.
+///
+/// That settling is a change in its own right, and used to be lost whenever
+/// the action then refused — an empty task title, a task deleted a moment
+/// before. The `?` on the action left before the save, the broadcast and the
+/// alert, so the finished phase existed only in memory and the window sat at
+/// 00:00 until something else happened to publish. Now an action's error
+/// returns early only when nothing else happened. Every action validates
+/// before it touches anything, so one that refuses has left the data as the
+/// tick left it, and that is what is saved and published.
+///
+/// When the action and the save both fail the action's error is returned: it
+/// is the one the person can do something about. A failed save is handled as
+/// in [`reconcile`].
+fn apply<F>(state: &RuntimeState, now: i64, action: F) -> Change
+where
+    F: FnOnce(&mut AppData, i64) -> Result<(), String>,
+{
+    let mut data = match lock_data(state) {
+        Ok(data) => data,
+        Err(error) => return Change::nothing(Err(error)),
+    };
+    let completed = data.tick(now);
+    let acted = action(&mut data, now);
+    if acted.is_err() && completed.is_none() {
+        return Change::nothing(acted);
+    }
+    sync_quiet(state, &mut data, now);
+    let saved = state.save(&data, now);
+    Change {
+        snapshot: Some(state.snapshot(&data, now)),
+        completed,
+        result: acted.and(saved),
+    }
+}
+
+/// Tells the window, and the user if a phase ended, what a pass produced, and
+/// hands back the pass's result. Called with the data lock released.
+fn broadcast(app: &AppHandle, change: Change) -> Result<(), String> {
+    if let Some(snapshot) = &change.snapshot {
+        publish(app, snapshot);
+        if let Some(phase) = change.completed {
+            notify_boundary(app, phase, snapshot);
+        }
+    }
+    change.result
+}
+
+/// [`reconcile`], broadcast. What the reconciliation thread runs on every
+/// wake-up.
+fn advance(state: &RuntimeState, app: &AppHandle) -> Result<(), String> {
+    broadcast(app, reconcile(state, now_ms()))
+}
+
+/// [`apply`], broadcast. What every command that changes anything goes through.
 fn mutate<F>(state: &RuntimeState, app: &AppHandle, action: F) -> Result<(), String>
 where
     F: FnOnce(&mut AppData, i64) -> Result<(), String>,
 {
-    let now = now_ms();
-    let mut data = lock_data(state)?;
-    let completed = data.tick(now);
-    action(&mut data, now)?;
-    sync_quiet(state, &mut data, now);
-    state.store.save(&data)?;
-    // The write above covers everything, captured notifications included.
-    state.clear_notifications_dirty();
-    let snapshot = state.snapshot(&data, now);
-    drop(data);
-
-    // The timer may have started, stopped or moved; the sleeping thread needs
-    // to recompute how long it can wait.
-    state.nudge();
-    publish(app, &snapshot);
-    if let Some(phase) = completed {
-        notify_boundary(app, phase, &snapshot);
+    let change = apply(state, now_ms(), action);
+    if change.snapshot.is_some() {
+        // The timer may have started, stopped or moved; the sleeping thread
+        // needs to recompute how long it can wait.
+        state.nudge();
     }
-    Ok(())
+    broadcast(app, change)
 }
 
 fn toggle_timer_impl(state: &RuntimeState, app: &AppHandle) -> Result<(), String> {
@@ -451,7 +664,12 @@ fn toggle_timer_impl(state: &RuntimeState, app: &AppHandle) -> Result<(), String
 /// follows `state-changed` from then on.
 #[tauri::command]
 fn get_snapshot(state: State<'_, RuntimeState>, app: AppHandle) -> Result<AppData, String> {
-    advance(&state, &app)?;
+    // A save that failed is not a reason to show a reloaded window nothing:
+    // it needs the state more than it needs that error, which is being
+    // retried in the background anyway.
+    if let Err(error) = advance(&state, &app) {
+        eprintln!("timer reconciliation failed: {error}");
+    }
     let data = lock_data(&state)?;
     Ok(state.snapshot(&data, now_ms()))
 }
@@ -648,12 +866,19 @@ fn update_settings(
     app: AppHandle,
 ) -> Result<(), String> {
     let enabled = settings.notification_filter.enabled;
-    mutate(&state, &app, move |data, _| {
+    let mut applied = false;
+    let result = mutate(&state, &app, |data, _| {
         data.update_settings(settings);
+        applied = true;
         Ok(())
-    })?;
-    sync_listener(&app, &state, enabled);
-    Ok(())
+    });
+    // Whenever the settings took effect in memory, saved or not. Leaving on a
+    // failed save had capture switched on in the window and in the state while
+    // the listener stayed stopped.
+    if applied {
+        sync_listener(&app, &state, enabled);
+    }
+    result
 }
 
 #[tauri::command]
@@ -723,24 +948,51 @@ fn clear_history(state: State<'_, RuntimeState>, app: AppHandle) -> Result<(), S
     })
 }
 
-/// Leaves the machine as Pomodoro found it: banners back on if they were turned
-/// off for a focus interval, and captured notifications written rather than
-/// waiting on the debounce.
-fn shut_down(app: &AppHandle) {
-    let state = app.state::<RuntimeState>();
-    state.listener.stop();
-    state.quiet_desire.store(0, Ordering::Release);
-    if let Ok(mut data) = state.data.lock() {
-        if let Some(previous) = data.banner_restore.take() {
-            if let Err(error) = quiet::write_show_banners(previous) {
-                eprintln!("could not restore notification banners: {error}");
+impl RuntimeState {
+    /// Leaves the machine as Pomodoro found it, and the store as a quit should
+    /// leave it. Runs once; later calls do nothing, because every orderly way
+    /// out now comes through here and several of them fire for one exit.
+    ///
+    /// In order:
+    ///
+    /// - Shutdown is announced before anything else, so that from the first
+    ///   line nothing can silence the desktop again; see [`may_silence`].
+    ///   Anything that silenced it just before did so under the data lock, and
+    ///   has left its marker where the restore below will find it.
+    /// - A running interval is paused. It used to be left running, deadline
+    ///   and all: quit five minutes into a focus, launch the next morning, and
+    ///   the first tick recorded a full completed focus, credited the task,
+    ///   announced "Focus complete" and started a break. Quitting is walking
+    ///   away, and what is kept is the time that was left. If the interval is
+    ///   in fact already due, `pause` completes it instead, which is right.
+    /// - Banners go back on if they were turned off for a focus interval.
+    /// - Everything is written, captured notifications included, rather than
+    ///   waiting on the debounce.
+    fn shut_down(&self, now_ms: i64) {
+        if self.shutting_down.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        self.listener.stop();
+        self.quiet_desire.store(0, Ordering::Release);
+        if let Ok(mut data) = self.data.lock() {
+            data.pause(now_ms);
+            if let Some(previous) = data.banner_restore.take() {
+                if let Err(error) = quiet::write_show_banners(previous) {
+                    eprintln!("could not restore notification banners: {error}");
+                }
+            }
+            if let Err(error) = self.store.save(&data) {
+                eprintln!("could not save on shutdown: {error}");
             }
         }
-        if let Err(error) = state.store.save(&data) {
-            eprintln!("could not save on shutdown: {error}");
-        }
+        self.clear_notifications_dirty();
+        // The reconciliation thread has nothing left to wait for.
+        self.nudge();
     }
-    state.clear_notifications_dirty();
+}
+
+fn shut_down(app: &AppHandle) {
+    app.state::<RuntimeState>().shut_down(now_ms());
 }
 
 fn show_main_window(app: &AppHandle) {
@@ -810,20 +1062,23 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             let store = Store::new(data_dir);
-            let data = store.load_or_set_aside(now_ms());
+            let launched_at = now_ms();
+            let mut data = store.load_or_set_aside(launched_at);
+            // A phase that ran out while the app was not running — it was
+            // killed, or the machine went down — is settled here, quietly,
+            // rather than by the first tick: no banner for something that
+            // ended hours ago and no break starting itself in an empty room.
+            let recovered = data.recover_at_launch(launched_at);
             let capture_enabled = data.settings.notification_filter.enabled;
-            app.manage(RuntimeState {
-                data: Mutex::new(data),
-                store,
-                listener: Arc::new(NotificationListener::new()),
-                notifications_dirty_since: AtomicI64::new(0),
-                quiet_desire: AtomicI8::new(-1),
-                wake: Condvar::new(),
-                wake_lock: Mutex::new(()),
-                tray_toggle: OnceLock::new(),
-                tray_wanted: AtomicU8::new(0),
-                tray_shown: AtomicU8::new(0),
-            });
+            let state = RuntimeState::new(data, store);
+            if recovered {
+                if let Ok(data) = state.data.lock() {
+                    if let Err(error) = state.save(&data, launched_at) {
+                        eprintln!("could not save the interval settled at launch: {error}");
+                    }
+                }
+            }
+            app.manage(state);
             build_tray(app)?;
 
             let handle = app.handle().clone();
@@ -838,11 +1093,18 @@ pub fn run() {
 
             // Sleeps until the next deadline, the next pending write, or a
             // nudge from a command — not on a fixed half-second beat.
+            //
+            // It stops at shutdown, checked on both sides of the sleep: once
+            // the desktop and the store have been left as they should be,
+            // nothing here may touch either again.
             thread::spawn(move || loop {
                 let state = handle.state::<RuntimeState>();
-                let wait = state.next_wait(now_ms());
-                if let Ok(guard) = state.wake_lock.lock() {
-                    let _ = state.wake.wait_timeout(guard, wait);
+                if state.shutting_down.load(Ordering::SeqCst) {
+                    break;
+                }
+                state.wait_for_work(state.next_wait(now_ms()));
+                if state.shutting_down.load(Ordering::SeqCst) {
+                    break;
                 }
                 if let Err(error) = advance(&state, &handle) {
                     eprintln!("timer reconciliation failed: {error}");
@@ -879,8 +1141,26 @@ pub fn run() {
             delete_notification,
             clear_notifications,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Pomodoro");
+        .build(tauri::generate_context!())
+        .expect("error while running Pomodoro")
+        // Cleanup used to hang off the tray's Quit item alone, so any other
+        // orderly way out left the banners off and the last captured
+        // notifications unwritten. Both events, because which of them a given
+        // exit produces is the runtime's business; `shut_down` runs once
+        // whichever comes first. The exit is never prevented here.
+        //
+        // Not covered: SIGTERM and the like end the process without either
+        // event. That needs a signal handler and is dealt with separately;
+        // until then the persisted restore marker repairs the desktop at the
+        // next launch.
+        .run(|app, event| {
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
+                shut_down(app);
+            }
+        });
 }
 
 #[cfg(test)]
@@ -952,6 +1232,303 @@ mod tray {
         let wanted = AtomicU8::new(1);
         let shown = AtomicU8::new(1);
         settle_tray(&wanted, &shown, |_| panic!("nothing to apply"));
+    }
+}
+
+/// The reconciliation thread's sleep, the save path and shutdown, exercised on
+/// a [`RuntimeState`] with no window behind it. Everything that needs an
+/// `AppHandle` — publishing, the boundary alert — is downstream of what these
+/// return.
+#[cfg(test)]
+mod runtime {
+    use super::*;
+    use std::{fs, path::PathBuf, time::Instant};
+
+    fn scratch(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "pomodoro-runtime-{name}-{}-{}",
+            std::process::id(),
+            now_ms()
+        ))
+    }
+
+    /// A store whose every save fails: its data directory is a file.
+    fn unwritable(name: &str) -> (Store, PathBuf) {
+        let blocker = scratch(name);
+        fs::write(&blocker, b"not a directory").unwrap();
+        (Store::new(&blocker), blocker)
+    }
+
+    /// A focus on one task that began `elapsed_ms` before `now`.
+    fn focus_begun(now: i64, elapsed_ms: i64) -> AppData {
+        let mut data = AppData::default();
+        let task = data.create_task("Write the report", 1, 0).unwrap();
+        data.select_task(Some(task.id));
+        data.start_or_resume(now - elapsed_ms);
+        data
+    }
+
+    const TWENTY_SIX_MINUTES: i64 = 26 * 60 * 1_000;
+
+    #[test]
+    fn a_nudge_that_lands_before_the_wait_begins_is_not_lost() {
+        let state = RuntimeState::new(AppData::default(), Store::new(scratch("nudge")));
+        // The gap: the thread has decided how long to sleep, and is not yet
+        // asleep.
+        state.nudge();
+
+        let began = Instant::now();
+        state.wait_for_work(Duration::from_secs(5));
+        assert!(
+            began.elapsed() < Duration::from_secs(1),
+            "slept {:?} through a nudge",
+            began.elapsed()
+        );
+
+        // One nudge is one wake-up: the next wait runs its time.
+        let began = Instant::now();
+        state.wait_for_work(Duration::from_millis(60));
+        assert!(began.elapsed() >= Duration::from_millis(60));
+    }
+
+    #[test]
+    fn a_nudge_during_the_wait_ends_it() {
+        let state = Arc::new(RuntimeState::new(
+            AppData::default(),
+            Store::new(scratch("nudge-during")),
+        ));
+        let nudger = Arc::clone(&state);
+        let began = Instant::now();
+        let handle = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            nudger.nudge();
+        });
+        state.wait_for_work(Duration::from_secs(5));
+        assert!(began.elapsed() < Duration::from_secs(1));
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn the_wait_is_the_nearest_thing_that_needs_doing() {
+        let now = 1_000_000;
+        assert_eq!(wait_for(None, 0, now), IDLE_WAKE);
+        assert_eq!(
+            wait_for(Some(now + 400), 0, now),
+            Duration::from_millis(400)
+        );
+        assert_eq!(wait_for(Some(now + 60_000), 0, now), RUNNING_WAKE);
+        assert_eq!(wait_for(Some(now - 5), 0, now), Duration::ZERO);
+        // A notification filed half a second ago is written in a second and a
+        // half.
+        assert_eq!(wait_for(None, now - 500, now), Duration::from_millis(1_500));
+        assert_eq!(wait_for(None, now - 10_000, now), Duration::ZERO);
+
+        // After a failed save the next attempt is a retry away — not zero,
+        // which is what an overdue mark left in place used to give.
+        let retry = Duration::from_millis(SAVE_RETRY_MS as u64);
+        assert_eq!(wait_for(None, retry_mark(now), now), retry.min(IDLE_WAKE));
+        assert_eq!(
+            wait_for(None, retry_mark(now), now + 10_000),
+            Duration::from_millis(SAVE_RETRY_MS as u64 - 10_000)
+        );
+        assert_ne!(
+            retry_mark(-SAVE_RETRY_MS),
+            0,
+            "0 would mean nothing to save"
+        );
+    }
+
+    #[test]
+    fn a_flush_that_fails_is_tried_again_later_rather_than_at_once() {
+        let (store, blocker) = unwritable("flush");
+        let state = RuntimeState::new(AppData::default(), store);
+        let now = now_ms();
+        state.mark_notifications_dirty(now - 5_000);
+        assert_eq!(state.next_wait(now), Duration::ZERO, "the flush is overdue");
+
+        state.flush_notifications(now, false);
+        let wait = state.next_wait(now);
+        assert!(
+            wait >= Duration::from_millis(SAVE_RETRY_MS as u64).min(IDLE_WAKE),
+            "a failed flush left a wait of {wait:?}"
+        );
+        // Still dirty, so the change is not forgotten...
+        let mark = state.notifications_dirty_since.load(Ordering::Acquire);
+        assert_eq!(mark, retry_mark(now));
+        // ...and the flush agrees with the wait that it is not yet due: a
+        // notification arriving meanwhile does not pull it forward either.
+        state.mark_notifications_dirty(now + 1_000);
+        state.flush_notifications(now + 1_000, false);
+        assert_eq!(
+            state.notifications_dirty_since.load(Ordering::Acquire),
+            mark
+        );
+
+        // Once the store can be written, the retry lands and clears the mark.
+        fs::remove_file(&blocker).unwrap();
+        state.flush_notifications(now + SAVE_RETRY_MS, false);
+        assert_eq!(state.notifications_dirty_since.load(Ordering::Acquire), 0);
+        assert!(state.store.load().is_ok());
+        let _ = fs::remove_dir_all(blocker);
+    }
+
+    #[test]
+    fn a_later_save_that_works_clears_a_pending_retry() {
+        let (store, blocker) = unwritable("clears");
+        let state = RuntimeState::new(AppData::default(), store);
+        let now = now_ms();
+        state.mark_notifications_dirty(now - 5_000);
+        state.flush_notifications(now, false);
+        assert_ne!(state.notifications_dirty_since.load(Ordering::Acquire), 0);
+
+        fs::remove_file(&blocker).unwrap();
+        let change = apply(&state, now + 10, |data, now| {
+            data.create_task("Anything", 1, now);
+            Ok(())
+        });
+        assert_eq!(change.result, Ok(()));
+        assert_eq!(state.notifications_dirty_since.load(Ordering::Acquire), 0);
+        let _ = fs::remove_dir_all(blocker);
+    }
+
+    #[test]
+    fn a_phase_that_ended_is_kept_when_the_action_then_refuses() {
+        let directory = scratch("refused");
+        let now = now_ms();
+        let state = RuntimeState::new(focus_begun(now, TWENTY_SIX_MINUTES), Store::new(&directory));
+
+        let change = apply(&state, now, |data, now| {
+            data.create_task("   ", 1, now)
+                .ok_or_else(|| "Enter a task name.".to_string())?;
+            Ok(())
+        });
+
+        // The person still hears that their title was refused...
+        assert_eq!(change.result, Err("Enter a task name.".to_string()));
+        // ...and the focus that finished is announced, shown and on disk.
+        assert_eq!(change.completed, Some(Phase::Focus));
+        let snapshot = change.snapshot.expect("the completed phase is published");
+        assert_eq!(snapshot.timer.phase, Phase::ShortBreak);
+        assert_eq!(snapshot.sessions.len(), 1);
+        let saved = state.store.load().unwrap();
+        assert_eq!(saved.sessions.len(), 1);
+        assert_eq!(saved.tasks[0].completed_pomodoros, 1);
+        assert_eq!(saved.tasks.len(), 1, "the refused task was not added");
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn an_action_that_refuses_with_nothing_else_going_on_changes_nothing() {
+        let directory = scratch("refused-idle");
+        let state = RuntimeState::new(AppData::default(), Store::new(&directory));
+
+        let change = apply(&state, now_ms(), |_, _| Err("No.".to_string()));
+
+        assert_eq!(change.result, Err("No.".to_string()));
+        assert!(change.snapshot.is_none());
+        assert_eq!(change.completed, None);
+        assert!(!directory.exists(), "nothing was saved");
+    }
+
+    #[test]
+    fn a_save_that_fails_still_publishes_and_is_retried() {
+        let (store, blocker) = unwritable("save-fails");
+        let now = now_ms();
+        let state = RuntimeState::new(focus_begun(now, TWENTY_SIX_MINUTES), store);
+
+        // A user action: applied in memory, published, and the error surfaced.
+        let change = apply(&state, now, |data, now| {
+            data.create_task("Second task", 1, now);
+            Ok(())
+        });
+        assert!(change.result.is_err());
+        assert_eq!(change.completed, Some(Phase::Focus));
+        let snapshot = change
+            .snapshot
+            .expect("memory is the truth; it is published");
+        assert_eq!(snapshot.tasks.len(), 2);
+        assert_eq!(snapshot.sessions.len(), 1);
+        assert_eq!(
+            state.notifications_dirty_since.load(Ordering::Acquire),
+            retry_mark(now),
+            "the write is owed, and will be retried"
+        );
+
+        // Both failing: the action's error is the one the person can act on.
+        let (store, second_blocker) = unwritable("both-fail");
+        let both = RuntimeState::new(focus_begun(now, TWENTY_SIX_MINUTES), store);
+        let change = apply(&both, now, |_, _| Err("Enter a task name.".to_string()));
+        assert_eq!(change.result, Err("Enter a task name.".to_string()));
+        assert!(change.snapshot.is_some());
+        assert_ne!(both.notifications_dirty_since.load(Ordering::Acquire), 0);
+
+        let _ = fs::remove_file(blocker);
+        let _ = fs::remove_file(second_blocker);
+    }
+
+    #[test]
+    fn a_phase_end_is_published_even_when_it_cannot_be_saved() {
+        let (store, blocker) = unwritable("reconcile");
+        let now = now_ms();
+        let state = RuntimeState::new(focus_begun(now, TWENTY_SIX_MINUTES), store);
+
+        let change = reconcile(&state, now);
+        assert!(change.result.is_err());
+        assert_eq!(change.completed, Some(Phase::Focus));
+        assert_eq!(
+            change.snapshot.expect("published").timer.phase,
+            Phase::ShortBreak
+        );
+        assert_eq!(
+            state.notifications_dirty_since.load(Ordering::Acquire),
+            retry_mark(now)
+        );
+
+        // Nothing further happened, so nothing further is attempted: a store
+        // that will not save is not hammered from here either.
+        let again = reconcile(&state, now + 1_000);
+        assert_eq!(again.result, Ok(()));
+        assert!(again.snapshot.is_none());
+        let _ = fs::remove_file(blocker);
+    }
+
+    #[test]
+    fn nothing_silences_the_desktop_once_shutdown_has_begun() {
+        assert!(may_silence(true, false));
+        assert!(!may_silence(true, true));
+        assert!(!may_silence(false, false));
+        assert!(!may_silence(false, true));
+    }
+
+    #[test]
+    fn quitting_pauses_a_running_interval_saves_it_and_happens_once() {
+        let directory = scratch("quit");
+        let now = now_ms();
+        let state = RuntimeState::new(focus_begun(now, 5 * 60 * 1_000), Store::new(&directory));
+        state.mark_notifications_dirty(now);
+
+        state.shut_down(now);
+
+        assert!(state.shutting_down.load(Ordering::SeqCst));
+        assert_eq!(state.notifications_dirty_since.load(Ordering::Acquire), 0);
+        let saved = state.store.load().unwrap();
+        assert_eq!(saved.timer.status, TimerStatus::Paused);
+        assert_eq!(saved.timer.remaining_seconds, 20 * 60);
+        assert!(saved.sessions.is_empty());
+        // The thread it nudged has nothing to sleep for.
+        let began = Instant::now();
+        state.wait_for_work(Duration::from_secs(5));
+        assert!(began.elapsed() < Duration::from_secs(1));
+
+        // Exit is reported more than once; only the first call acts.
+        state.data.lock().unwrap().start_or_resume(now + 1_000);
+        state.shut_down(now + 2_000);
+        assert_eq!(
+            state.data.lock().unwrap().timer.status,
+            TimerStatus::Running,
+            "a second shutdown did its work again"
+        );
+        let _ = fs::remove_dir_all(directory);
     }
 }
 

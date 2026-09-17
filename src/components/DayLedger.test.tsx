@@ -46,4 +46,15 @@ describe("the day ledger", () => {
     renderLedger([focus("bad", 9e18, 1_500), focus("good", NOW - 3_600_000, 1_500)]);
     expect(screen.getByText(/1 focus · 25m/)).toBeTruthy();
   });
+
+  it("lists every session the total counts, not only the newest twelve", () => {
+    // Six pomodoros with their breaks is already twelve records.
+    const sessions = Array.from({ length: 14 }, (_, index) =>
+      focus(`s${index}`, NOW - (index + 1) * 1_800_000, 1_500),
+    );
+    renderLedger(sessions);
+
+    expect(screen.getAllByRole("listitem")).toHaveLength(14);
+    expect(screen.getByText(/14 focus · 350m/)).toBeTruthy();
+  });
 });

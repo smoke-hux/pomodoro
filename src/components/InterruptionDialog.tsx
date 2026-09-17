@@ -1,35 +1,47 @@
 import { memo, useEffect, useRef, useState } from "react";
+import { useModalFocus } from "../lib/useModalFocus";
 
 interface InterruptionDialogProps {
   open: boolean;
   onClose: () => void;
-  onSave: (text: string, category: "internal" | "external") => Promise<void>;
+  /** Resolves to whether the note was saved. A refused one keeps the dialog, and the note, open. */
+  onSave: (text: string, category: "internal" | "external") => Promise<boolean>;
 }
 
 function InterruptionDialogComponent({ open, onClose, onSave }: InterruptionDialogProps) {
   const [text, setText] = useState("");
   const [category, setCategory] = useState<"internal" | "external">("internal");
+  const [saving, setSaving] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     if (open) {
       setText("");
-      requestAnimationFrame(() => inputRef.current?.focus());
+      setSaving(false);
     }
   }, [open]);
+  useModalFocus(open, dialogRef, inputRef);
 
   if (!open) return null;
 
   const save = async () => {
-    if (!text.trim()) return;
-    await onSave(text.trim(), category);
-    onClose();
+    // `saving` stops Enter pressed twice from filing the same note twice: the
+    // dialog stays open, with the text still in it, until the first save returns.
+    if (!text.trim() || saving) return;
+    setSaving(true);
+    const saved = await onSave(text.trim(), category);
+    setSaving(false);
+    // Closing regardless threw the note away exactly when it had not been
+    // kept: a save the backend refused closed the dialog over the only copy.
+    if (saved) onClose();
   };
 
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
       <section
         className="dialog capture-dialog"
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="capture-title"
@@ -76,7 +88,7 @@ function InterruptionDialogComponent({ open, onClose, onSave }: InterruptionDial
             <button className="text-button" type="button" onClick={onClose}>
               Cancel
             </button>
-            <button className="small-primary" type="submit" disabled={!text.trim()}>
+            <button className="small-primary" type="submit" disabled={!text.trim() || saving}>
               Save to inbox
             </button>
           </div>

@@ -139,9 +139,13 @@ function TaskComposer({
             min={1}
             max={16}
             value={estimate}
-            onChange={(event) =>
-              setEstimate(Math.min(16, Math.max(1, Number(event.target.value) || 1)))
-            }
+            onChange={(event) => {
+              // Only a value already in range is taken. Clamping whatever was
+              // typed turned the "1" of "12" into 1 and the "2" into 12 by
+              // luck, and an emptied field into 1 before it could be retyped.
+              const typed = Number(event.target.value);
+              if (Number.isInteger(typed) && typed >= 1 && typed <= 16) setEstimate(typed);
+            }}
           />
           <button
             type="button"

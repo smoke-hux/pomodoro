@@ -93,4 +93,29 @@ describe("useCountdown", () => {
     act(() => void vi.advanceTimersByTime(1_000));
     expect(result.current).toBe(59);
   });
+
+  it("never draws a new interval with the previous one's remaining time", () => {
+    // The value used to be copied into state by an effect, one render late: a
+    // phase change was drawn once as the new phase at the old 00:00.
+    vi.setSystemTime(50_000);
+    const drawn: number[] = [];
+    const { rerender } = renderHook(
+      ({ current }: { current: TimerState }) => {
+        const remaining = useCountdown(current);
+        drawn.push(remaining);
+        return remaining;
+      },
+      { initialProps: { current: timer({ status: "running", endsAt: 50_000, remainingSeconds: 0 }) } },
+    );
+    expect(drawn.at(-1)).toBe(0);
+
+    drawn.length = 0;
+    rerender({ current: timer({ status: "idle", endsAt: null, remainingSeconds: 300, durationSeconds: 300 }) });
+    expect(drawn).not.toContain(0);
+    expect(drawn.at(-1)).toBe(300);
+
+    drawn.length = 0;
+    rerender({ current: timer({ status: "running", endsAt: 50_000 + 300_000, remainingSeconds: 300 }) });
+    expect(new Set(drawn)).toEqual(new Set([300]));
+  });
 });

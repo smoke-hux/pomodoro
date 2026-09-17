@@ -31,6 +31,19 @@ pub const MAX_APP_NAME_CHARS: usize = 128;
 pub const MAX_SUMMARY_CHARS: usize = 512;
 pub const MAX_BODY_CHARS: usize = 4_096;
 
+/// How recently a row must have been received for a later `Notify` call to be
+/// read as an update to it.
+///
+/// A `replaces_id` is only meaningful for as long as the notification daemon
+/// that issued it keeps running: the daemon's counter starts again when it
+/// restarts, at login or after a shell crash, while the rows here are
+/// persisted for weeks. Without a limit, a call naming id 7 today landed on
+/// whatever this app had filed under id 7 last Tuesday and rewrote it. A
+/// sender that really is updating — a download counting up, a call still
+/// ringing, a music player — refreshes `received_at` with every update, so it
+/// never leaves the window however long it goes on.
+pub const REPLACE_WINDOW_MS: i64 = 60 * 60 * 1_000;
+
 /// Names Pomodoro's own boundary notifications arrive under. They are dropped
 /// before the filter runs, so turning capture on cannot fill the inbox with the
 /// app's own "Focus complete" messages.
@@ -142,7 +155,9 @@ pub struct DesktopNotification {
     /// this record instead of adding another row.
     pub replaces_id: u32,
     /// The task this notification was turned into, if any. Set once so a second
-    /// "Turn into task" on the same row cannot create a duplicate.
+    /// "Turn into task" on the same row cannot create a duplicate, and cleared
+    /// when an update brings different words: the link is to a task made from
+    /// text this row no longer shows.
     pub task_id: Option<String>,
 }
 
@@ -401,7 +416,18 @@ pub struct Interruption {
     pub category: InterruptionCategory,
     pub captured_at: i64,
     pub handled: bool,
+    /// The task that was active when this was captured: "noted while working
+    /// on X". It says nothing about conversion, and is never read as if it did.
     pub task_id: Option<String>,
+    /// The task this interruption was turned into, if any.
+    ///
+    /// Separate from `task_id` because one field used to do both jobs. An
+    /// interruption captured mid-focus — the normal case — already carried the
+    /// active task's id, "Turn into task" took that for the mark of an earlier
+    /// conversion, ticked the note as handled and made nothing, under a
+    /// message saying the task had been added. Missing from stores written
+    /// before it existed, where it loads as `None`.
+    pub converted_task_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -583,6 +609,32 @@ impl AppData {
     /// Advances an expired running phase at most once. The returned value is the
     /// phase that completed; `None` means no completion occurred.
     pub fn tick(&mut self, now_ms: i64) -> Option<Phase> {
+        self.complete_due(now_ms, true)
+    }
+
+    /// Settles, at launch, a phase whose deadline passed while the app was not
+    /// running — a crash or a kill, since an orderly quit pauses the timer
+    /// first. Returns whether anything changed, so the caller can save.
+    ///
+    /// The first [`Self::tick`] after launch used to do this, and treated the
+    /// deadline as having just gone by: the next phase started itself, so the
+    /// app opened the morning after a crash already counting down a break
+    /// nobody was taking, and the caller announced "Focus complete" for an
+    /// interval that had ended the evening before. The work was still done, so
+    /// the session is recorded at its deadline, the task credited and the
+    /// cycle moved on exactly as `tick` would; but the next phase waits, idle,
+    /// to be started, and the caller is expected to say nothing.
+    ///
+    /// A running phase that is not yet due is left alone. It is still
+    /// legitimately counting: the deadline is wall-clock time, and it did not
+    /// stop because the process did.
+    pub fn recover_at_launch(&mut self, now_ms: i64) -> bool {
+        self.complete_due(now_ms, false).is_some()
+    }
+
+    /// The completion behind [`Self::tick`] and [`Self::recover_at_launch`],
+    /// which differ only in whether the next phase may start itself.
+    fn complete_due(&mut self, now_ms: i64, allow_auto_start: bool) -> Option<Phase> {
         if self.timer.status != TimerStatus::Running {
             return None;
         }
@@ -612,7 +664,7 @@ impl AppData {
             }
         };
 
-        let auto_start = self.should_auto_start(next_phase);
+        let auto_start = allow_auto_start && self.should_auto_start(next_phase);
         self.enter_phase(next_phase, now_ms, auto_start);
         Some(completed_phase)
     }
@@ -722,6 +774,9 @@ impl AppData {
             if interruption.task_id.as_deref() == Some(id) {
                 interruption.task_id = None;
             }
+            if interruption.converted_task_id.as_deref() == Some(id) {
+                interruption.converted_task_id = None;
+            }
         }
         for notification in &mut self.notifications {
             if notification.task_id.as_deref() == Some(id) {
@@ -754,6 +809,7 @@ impl AppData {
             captured_at: now_ms,
             handled: false,
             task_id: self.timer.active_task_id.clone(),
+            converted_task_id: None,
         };
         self.interruptions.push(interruption.clone());
         Some(interruption)
@@ -765,12 +821,22 @@ impl AppData {
 
     /// Turns a captured interruption into a task, at most once. Returns the task
     /// id whether it was created now or by an earlier call.
+    ///
+    /// "An earlier call" is judged by `converted_task_id` alone. The task the
+    /// note was captured under, `task_id`, is somebody else's task and proves
+    /// nothing; see [`Interruption::converted_task_id`] for what reading it
+    /// here used to cost.
     pub fn convert_interruption_to_task(&mut self, id: &str, now_ms: i64) -> Option<String> {
         let (text, existing_task) = self
             .interruptions
             .iter()
             .find(|interruption| interruption.id == id)
-            .map(|interruption| (interruption.text.clone(), interruption.task_id.clone()))?;
+            .map(|interruption| {
+                (
+                    interruption.text.clone(),
+                    interruption.converted_task_id.clone(),
+                )
+            })?;
 
         if let Some(task_id) = existing_task {
             if self.tasks.iter().any(|task| task.id == task_id) {
@@ -785,7 +851,7 @@ impl AppData {
             .iter_mut()
             .find(|interruption| interruption.id == id)
         {
-            interruption.task_id = Some(task.id.clone());
+            interruption.converted_task_id = Some(task.id.clone());
             interruption.handled = true;
         }
         Some(task.id)
@@ -862,6 +928,29 @@ impl AppData {
     /// on the existing row rather than adding one per update, so a chatty sender
     /// cannot flood the inbox. Text is truncated and Pomodoro's own boundary
     /// notifications are dropped before the filter is consulted.
+    ///
+    /// Which row an update belongs to is decided in two steps, both limited to
+    /// rows from the same app received within [`REPLACE_WINDOW_MS`]:
+    ///
+    /// 1. A row already carrying this `replaces_id`.
+    /// 2. Failing that, the newest row that was posted as new (`replaces_id`
+    ///    0) with the same summary, which is then adopted under this id.
+    ///
+    /// The second step is a guess, and exists because the first can never
+    /// match a sender's first update. A new notification is posted with
+    /// `replaces_id` 0; the id the daemon gave it travels back in the method
+    /// reply, which a bus monitor filing `Notify` calls does not see. So the
+    /// first update arrived naming an id no row had, was filed as a second
+    /// row, and only later updates found that one — every updating
+    /// notification left its original behind, frozen at "10%". Matching on
+    /// the summary is right for the senders this is for, which keep the title
+    /// and change the body. It is wrong when one app has two live
+    /// notifications with the same summary — two messages from one person —
+    /// and updates the older: the newer row is adopted and rewritten instead.
+    /// The inbox still ends with the right number of rows and the latest
+    /// words; one of them is attributed to the wrong original. A summary that
+    /// changes on the first update is not matched at all and adds a row, as
+    /// before.
     pub fn capture_notify(
         &mut self,
         app_name: impl Into<String>,
@@ -889,16 +978,38 @@ impl AppData {
         let body = truncate_chars(body.into(), MAX_BODY_CHARS);
 
         if replaces_id != 0 {
-            if let Some(position) = self.notifications.iter().position(|notification| {
-                notification.replaces_id == replaces_id
-                    && notification.app_name.to_lowercase() == app_name.to_lowercase()
-            }) {
+            let sender = app_name.to_lowercase();
+            let replaceable = |notification: &DesktopNotification| {
+                notification.app_name.to_lowercase() == sender
+                    && now_ms.saturating_sub(notification.received_at) <= REPLACE_WINDOW_MS
+            };
+            // Newest first, so `position` finds the most recent candidate.
+            let position = self
+                .notifications
+                .iter()
+                .position(|notification| {
+                    replaceable(notification) && notification.replaces_id == replaces_id
+                })
+                .or_else(|| {
+                    self.notifications.iter().position(|notification| {
+                        replaceable(notification)
+                            && notification.replaces_id == 0
+                            && notification.summary == summary
+                    })
+                });
+            if let Some(position) = position {
                 let mut existing = self.notifications.remove(position);
                 // Only genuinely new words are worth re-reading. An update that
-                // repeats the same text leaves a triaged row triaged.
+                // repeats the same text leaves a triaged row triaged and a
+                // converted row converted. New words are a new thing to decide
+                // about: keeping the link made them show as "already a task"
+                // and made converting them return the task written from the
+                // old words. That task stays in the list; only the link goes.
                 if existing.summary != summary || existing.body != body {
                     existing.triaged = false;
+                    existing.task_id = None;
                 }
+                existing.replaces_id = replaces_id;
                 existing.summary = summary;
                 existing.body = body;
                 existing.urgency = urgency;
@@ -987,7 +1098,18 @@ impl AppData {
 
     fn record_session(&mut self, outcome: SessionOutcome, now_ms: i64) {
         let phase = self.timer.phase;
-        let started_at = self.timer.started_at.unwrap_or(now_ms).min(now_ms);
+        // A completion is noticed, not witnessed: after a suspend, or a launch
+        // following a crash, `now_ms` can be hours past the moment the phase
+        // ran out, and stamping it with `now_ms` put yesterday evening's focus
+        // into this morning's ledger. The deadline is when it ended. Never
+        // later than now, so a clock that moved backwards cannot file a
+        // session in the future. Anything the user ended by hand ended now.
+        let ended_at = if outcome == SessionOutcome::Completed {
+            self.timer.ends_at.unwrap_or(now_ms).min(now_ms)
+        } else {
+            now_ms
+        };
+        let started_at = self.timer.started_at.unwrap_or(ended_at).min(ended_at);
         let remaining_seconds = self.timer.current_remaining_seconds(now_ms);
         let duration_seconds = if outcome == SessionOutcome::Completed {
             self.timer.duration_seconds
@@ -1016,7 +1138,7 @@ impl AppData {
             task_title,
             duration_seconds,
             started_at,
-            ended_at: now_ms,
+            ended_at,
             outcome,
         });
         if self.sessions.len() > SESSION_RETENTION {
@@ -1638,14 +1760,417 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(data.tasks.len(), 1);
         assert_eq!(
-            data.interruptions[0].task_id.as_deref(),
+            data.interruptions[0].converted_task_id.as_deref(),
             Some(first.as_str())
         );
+        // Captured with no task active, and converting does not invent one.
+        assert_eq!(data.interruptions[0].task_id, None);
         assert!(data.interruptions[0].handled);
 
         assert!(data
             .convert_interruption_to_task("interruption-missing", 40)
             .is_none());
+    }
+
+    /// The normal case, and the one that did nothing: a note captured while a
+    /// task is active already carries that task's id.
+    #[test]
+    fn an_interruption_captured_during_a_task_still_becomes_its_own_task() {
+        let mut data = AppData::default();
+        running_focus(&mut data);
+        let active = data.tasks[0].id.clone();
+        let captured = data
+            .capture_interruption("Renew the certificate", InterruptionCategory::Internal, 10)
+            .unwrap();
+        assert_eq!(captured.task_id.as_deref(), Some(active.as_str()));
+        assert_eq!(captured.converted_task_id, None);
+
+        let first = data
+            .convert_interruption_to_task(&captured.id, 20)
+            .expect("the conversion creates a task");
+        assert_ne!(first, active, "the active task is not the conversion");
+        assert_eq!(data.tasks.len(), 2);
+        assert_eq!(data.tasks[1].id, first);
+        assert_eq!(data.tasks[1].title, "Renew the certificate");
+        assert!(data.interruptions[0].handled);
+        // Where it was captured is kept; what it became is recorded beside it.
+        assert_eq!(
+            data.interruptions[0].task_id.as_deref(),
+            Some(active.as_str())
+        );
+        assert_eq!(
+            data.interruptions[0].converted_task_id.as_deref(),
+            Some(first.as_str())
+        );
+
+        let second = data
+            .convert_interruption_to_task(&captured.id, 30)
+            .expect("the second returns the task the first made");
+        assert_eq!(second, first);
+        assert_eq!(data.tasks.len(), 2);
+
+        // Deleting the task it became releases the marker, and only that one.
+        assert!(data.delete_task(&first));
+        assert_eq!(data.interruptions[0].converted_task_id, None);
+        assert_eq!(
+            data.interruptions[0].task_id.as_deref(),
+            Some(active.as_str())
+        );
+        let third = data
+            .convert_interruption_to_task(&captured.id, 40)
+            .expect("a released interruption converts again");
+        assert_eq!(data.tasks.len(), 2);
+        assert_eq!(data.tasks[1].id, third);
+    }
+
+    #[test]
+    fn an_interruption_stored_before_the_conversion_marker_still_loads() {
+        let stored = r#"{
+            "id": "interruption-1",
+            "text": "Phone call",
+            "category": "external",
+            "capturedAt": 200,
+            "handled": false,
+            "taskId": "task-1"
+        }"#;
+        let interruption: Interruption =
+            serde_json::from_str(stored).expect("an older interruption must still load");
+        assert_eq!(interruption.task_id.as_deref(), Some("task-1"));
+        assert_eq!(interruption.converted_task_id, None);
+
+        // And the field goes out under the name the window reads.
+        let value = serde_json::to_value(Interruption {
+            converted_task_id: Some("task-2".to_string()),
+            ..interruption
+        })
+        .unwrap();
+        assert_eq!(value["convertedTaskId"], "task-2");
+        assert_eq!(value["taskId"], "task-1");
+    }
+
+    #[test]
+    fn an_update_with_new_words_is_no_longer_the_task_made_from_the_old_ones() {
+        let mut data = AppData::default();
+        data.settings.notification_filter = capturing_filter();
+        let first = data
+            .capture_notify("Signal", "Alice", "Send me the report", 1, 3, 100)
+            .unwrap();
+        let task = data.convert_notification_to_task(&first.id, 150).unwrap();
+
+        // The same words again: still that task, still dealt with.
+        let repeat = data
+            .capture_notify("Signal", "Alice", "Send me the report", 1, 3, 200)
+            .unwrap();
+        assert_eq!(repeat.task_id.as_deref(), Some(task.as_str()));
+        assert!(repeat.triaged);
+
+        // Different words are a different thing to decide about.
+        let changed = data
+            .capture_notify("Signal", "Alice", "Also book the room", 1, 3, 300)
+            .unwrap();
+        assert_eq!(changed.id, first.id);
+        assert_eq!(changed.task_id, None);
+        assert!(!changed.triaged);
+        assert_eq!(data.notifications[0].task_id, None);
+        // The task written from the old words is not taken back.
+        assert_eq!(data.tasks.len(), 1);
+
+        let second_task = data.convert_notification_to_task(&first.id, 400).unwrap();
+        assert_ne!(second_task, task);
+        assert_eq!(data.tasks.len(), 2);
+    }
+
+    #[test]
+    fn an_id_from_before_the_replace_window_belongs_to_another_notification() {
+        let mut data = AppData::default();
+        data.settings.notification_filter = capturing_filter();
+        let old = data
+            .capture_notify("Signal", "Alice", "See you at six", 1, 7, 1_000)
+            .unwrap();
+
+        // The daemon restarted and handed id 7 out again, days later.
+        let later = 1_000 + REPLACE_WINDOW_MS + 1;
+        let unrelated = data
+            .capture_notify("Signal", "Bob", "Lunch?", 1, 7, later)
+            .unwrap();
+        assert_ne!(unrelated.id, old.id);
+        assert_eq!(data.notifications.len(), 2);
+        assert_eq!(data.notifications[1].summary, "Alice");
+        assert_eq!(data.notifications[1].body, "See you at six");
+
+        // On the edge of the window it is still the same notification.
+        let mut edge = AppData::default();
+        edge.settings.notification_filter = capturing_filter();
+        edge.capture_notify("Signal", "Alice", "a", 1, 7, 1_000)
+            .unwrap();
+        edge.capture_notify("Signal", "Alice", "b", 1, 7, 1_000 + REPLACE_WINDOW_MS)
+            .unwrap();
+        assert_eq!(edge.notifications.len(), 1);
+
+        // A sender that keeps updating never leaves the window, however long
+        // it goes on, because each update is the new "received".
+        let mut long = AppData::default();
+        long.settings.notification_filter = capturing_filter();
+        for step in 0..5 {
+            long.capture_notify(
+                "Transmission",
+                "Downloading",
+                format!("{step}"),
+                1,
+                9,
+                step * (REPLACE_WINDOW_MS - 1),
+            )
+            .unwrap();
+        }
+        assert_eq!(long.notifications.len(), 1);
+        assert_eq!(long.notifications[0].body, "4");
+    }
+
+    #[test]
+    fn the_first_update_adopts_the_row_its_sender_posted_as_new() {
+        let mut data = AppData::default();
+        data.settings.notification_filter = capturing_filter();
+        let posted = data
+            .capture_notify("Transmission", "Downloading", "10%", 1, 0, 100)
+            .unwrap();
+        assert_eq!(posted.replaces_id, 0);
+
+        // Case-insensitive on the app name, as the id match is.
+        let first_update = data
+            .capture_notify("transmission", "Downloading", "50%", 1, 42, 200)
+            .expect("the first update is captured");
+        assert_eq!(data.notifications.len(), 1, "no duplicate is left behind");
+        assert_eq!(first_update.id, posted.id);
+        assert_eq!(first_update.body, "50%");
+        assert_eq!(first_update.replaces_id, 42);
+        assert_eq!(first_update.received_at, 200);
+
+        let second_update = data
+            .capture_notify("Transmission", "Downloading", "90%", 1, 42, 300)
+            .unwrap();
+        assert_eq!(data.notifications.len(), 1);
+        assert_eq!(second_update.id, posted.id);
+        assert_eq!(second_update.body, "90%");
+
+        // An adopted row follows the same rules as any replaced one.
+        let mut triaged = AppData::default();
+        triaged.settings.notification_filter = capturing_filter();
+        let row = triaged
+            .capture_notify("Signal", "Alice", "Send me the report", 1, 0, 100)
+            .unwrap();
+        triaged.convert_notification_to_task(&row.id, 150).unwrap();
+        let adopted = triaged
+            .capture_notify("Signal", "Alice", "Also book the room", 1, 5, 200)
+            .unwrap();
+        assert_eq!(adopted.id, row.id);
+        assert_eq!(adopted.task_id, None);
+        assert!(!adopted.triaged);
+    }
+
+    #[test]
+    fn an_update_does_not_adopt_a_row_it_has_no_reason_to_claim() {
+        let mut data = AppData::default();
+        data.settings.notification_filter = capturing_filter();
+
+        // A different summary.
+        data.capture_notify("Transmission", "Downloading", "10%", 1, 0, 100)
+            .unwrap();
+        data.capture_notify("Transmission", "Finished", "ubuntu.iso", 1, 42, 200)
+            .unwrap();
+        assert_eq!(data.notifications.len(), 2);
+        assert_eq!(data.notifications[1].replaces_id, 0);
+        assert_eq!(data.notifications[1].body, "10%");
+
+        // Another app's row with the same summary.
+        data.capture_notify("Firefox", "Downloading", "1%", 1, 43, 300)
+            .unwrap();
+        assert_eq!(data.notifications.len(), 3);
+
+        // A row already known under another id.
+        let mut known = AppData::default();
+        known.settings.notification_filter = capturing_filter();
+        known
+            .capture_notify("Transmission", "Downloading", "10%", 1, 41, 100)
+            .unwrap();
+        known
+            .capture_notify("Transmission", "Downloading", "20%", 1, 42, 200)
+            .unwrap();
+        assert_eq!(known.notifications.len(), 2);
+
+        // A row from outside the window: whatever id it was given is long gone.
+        let mut old = AppData::default();
+        old.settings.notification_filter = capturing_filter();
+        old.capture_notify("Transmission", "Downloading", "10%", 1, 0, 100)
+            .unwrap();
+        old.capture_notify(
+            "Transmission",
+            "Downloading",
+            "50%",
+            1,
+            42,
+            100 + REPLACE_WINDOW_MS + 1,
+        )
+        .unwrap();
+        assert_eq!(old.notifications.len(), 2);
+        assert_eq!(old.notifications[1].body, "10%");
+        assert_eq!(old.notifications[1].replaces_id, 0);
+
+        // With two candidates the newest is the one adopted.
+        let mut two = AppData::default();
+        two.settings.notification_filter = capturing_filter();
+        two.capture_notify("Signal", "Alice", "first", 1, 0, 100)
+            .unwrap();
+        let newer = two
+            .capture_notify("Signal", "Alice", "second", 1, 0, 200)
+            .unwrap();
+        let update = two
+            .capture_notify("Signal", "Alice", "second, edited", 1, 8, 300)
+            .unwrap();
+        assert_eq!(update.id, newer.id);
+        assert_eq!(two.notifications.len(), 2);
+        assert_eq!(two.notifications[1].body, "first");
+    }
+
+    #[test]
+    fn a_completion_noticed_late_is_recorded_as_ending_at_its_deadline() {
+        let mut data = AppData::default();
+        data.update_settings(one_minute_settings());
+        data.start_or_resume(1_000);
+
+        // The machine slept through the deadline and woke three hours later.
+        let noticed = 1_000 + 3 * 60 * 60 * 1_000;
+        assert_eq!(data.tick(noticed), Some(Phase::Focus));
+        let session = &data.sessions[0];
+        assert_eq!(session.outcome, SessionOutcome::Completed);
+        assert_eq!(session.started_at, 1_000);
+        assert_eq!(session.ended_at, 61_000);
+        assert_eq!(session.duration_seconds, 60);
+        // The break that follows starts when it was noticed, not in the past.
+        assert_eq!(data.timer.started_at, Some(noticed));
+
+        // After a pause the deadline moves, and the record follows it.
+        let mut paused = AppData::default();
+        paused.update_settings(one_minute_settings());
+        paused.start_or_resume(0);
+        paused.pause(30_000);
+        paused.start_or_resume(100_000);
+        assert_eq!(paused.tick(500_000), Some(Phase::Focus));
+        assert_eq!(paused.sessions[0].started_at, 0);
+        assert_eq!(paused.sessions[0].ended_at, 130_000);
+
+        // A clock that went backwards cannot file a session in the future, or
+        // one that ends before it starts.
+        let mut skewed = AppData::default();
+        skewed.update_settings(one_minute_settings());
+        skewed.start_or_resume(100_000);
+        skewed.timer.ends_at = Some(90_000);
+        assert_eq!(skewed.tick(95_000), Some(Phase::Focus));
+        assert_eq!(skewed.sessions[0].ended_at, 90_000);
+        assert!(skewed.sessions[0].started_at <= skewed.sessions[0].ended_at);
+
+        // What the user ends by hand ended when they ended it.
+        let mut skipped = AppData::default();
+        skipped.update_settings(one_minute_settings());
+        skipped.start_or_resume(0);
+        skipped.skip(20_000);
+        assert_eq!(skipped.sessions[0].ended_at, 20_000);
+        let mut abandoned = AppData::default();
+        abandoned.update_settings(one_minute_settings());
+        abandoned.start_or_resume(0);
+        abandoned.reset(25_000);
+        assert_eq!(abandoned.sessions[0].ended_at, 25_000);
+    }
+
+    /// What an orderly quit does, followed by a launch the next morning.
+    #[test]
+    fn a_timer_paused_at_quit_completes_nothing_however_late_the_relaunch() {
+        let mut data = AppData::default();
+        running_focus(&mut data);
+        assert!(data.pause(5 * 60 * 1_000));
+
+        // Through the store and back, as a relaunch would have it.
+        let json = serde_json::to_string(&data).unwrap();
+        let mut relaunched: AppData = serde_json::from_str(&json).unwrap();
+        let next_morning = 16 * 60 * 60 * 1_000;
+
+        assert!(!relaunched.recover_at_launch(next_morning));
+        assert_eq!(relaunched.tick(next_morning), None);
+        assert!(relaunched.sessions.is_empty());
+        assert_eq!(relaunched.tasks[0].completed_pomodoros, 0);
+        assert_eq!(relaunched.timer.status, TimerStatus::Paused);
+        assert_eq!(relaunched.timer.phase, Phase::Focus);
+        assert_eq!(relaunched.timer.remaining_seconds, 20 * 60);
+        assert_eq!(
+            relaunched.snapshot(next_morning).timer.remaining_seconds,
+            20 * 60
+        );
+    }
+
+    #[test]
+    fn a_phase_that_ran_out_while_the_app_was_closed_is_settled_without_starting_the_next() {
+        let mut data = AppData::default();
+        assert!(data.settings.auto_start_breaks);
+        running_focus(&mut data);
+        let deadline = data.timer.ends_at.unwrap();
+        let next_morning = deadline + 12 * 60 * 60 * 1_000;
+
+        assert!(data.recover_at_launch(next_morning));
+        // The work was done, and is recorded when it was done.
+        assert_eq!(data.sessions.len(), 1);
+        assert_eq!(data.sessions[0].outcome, SessionOutcome::Completed);
+        assert_eq!(data.sessions[0].ended_at, deadline);
+        assert_eq!(data.tasks[0].completed_pomodoros, 1);
+        assert_eq!(data.timer.completed_in_cycle, 1);
+        // But nobody is taking this break: it waits to be started.
+        assert_eq!(data.timer.phase, Phase::ShortBreak);
+        assert_eq!(data.timer.status, TimerStatus::Idle);
+        assert_eq!(data.timer.started_at, None);
+        assert_eq!(data.timer.ends_at, None);
+
+        // Nothing is left for the tick that follows to announce.
+        assert!(!data.recover_at_launch(next_morning));
+        assert_eq!(data.tick(next_morning), None);
+        assert_eq!(data.sessions.len(), 1);
+
+        // The same from a break into a focus that would have started itself.
+        let mut from_break = AppData::default();
+        from_break.settings.auto_start_focus = true;
+        let task = from_break.create_task("Carry on", 1, 0).unwrap();
+        from_break.select_task(Some(task.id));
+        from_break.set_phase(Phase::ShortBreak, 0);
+        from_break.start_or_resume(0);
+        assert!(from_break.recover_at_launch(next_morning));
+        assert_eq!(from_break.timer.phase, Phase::Focus);
+        assert_eq!(from_break.timer.status, TimerStatus::Idle);
+    }
+
+    #[test]
+    fn launch_leaves_alone_a_timer_that_is_not_due_or_not_running() {
+        // Still counting: the deadline is wall-clock time and has not come.
+        let mut running = AppData::default();
+        running_focus(&mut running);
+        let deadline = running.timer.ends_at;
+        assert!(!running.recover_at_launch(10 * 60 * 1_000));
+        assert_eq!(running.timer.status, TimerStatus::Running);
+        assert_eq!(running.timer.ends_at, deadline);
+        assert_eq!(running.timer.started_at, Some(0));
+        assert!(running.sessions.is_empty());
+        assert_eq!(
+            running.snapshot(10 * 60 * 1_000).timer.remaining_seconds,
+            900
+        );
+
+        let mut paused = AppData::default();
+        running_focus(&mut paused);
+        paused.pause(60_000);
+        let before = paused.clone();
+        assert!(!paused.recover_at_launch(i64::MAX / 2));
+        assert_eq!(paused, before);
+
+        let mut idle = AppData::default();
+        let before = idle.clone();
+        assert!(!idle.recover_at_launch(i64::MAX / 2));
+        assert_eq!(idle, before);
     }
 
     #[test]

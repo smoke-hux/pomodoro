@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
+import { useModalFocus } from "../lib/useModalFocus";
 import { AlertTriangle, X } from "lucide-react";
 import type {
   CaptureStatus,
@@ -34,7 +35,8 @@ interface SettingsDialogProps {
   captureStatus: CaptureStatus;
   notificationCount: number;
   onClose: () => void;
-  onSave: (settings: Settings) => Promise<void>;
+  /** Resolves to whether the settings were saved. A refused save keeps the dialog and the edits. */
+  onSave: (settings: Settings) => Promise<boolean>;
   onClearHistory: () => Promise<void>;
   onClearNotifications: () => Promise<void>;
 }
@@ -143,6 +145,29 @@ function NumberSetting({
   suffix?: string;
   onChange: (value: number) => void;
 }) {
+  // What is in the field while it is being typed in, which is not always a
+  // valid value yet. Clamping on every keystroke made some values impossible
+  // to type: with a minimum of 5, the "1" of "15" became 5 and the next key
+  // made it 55; emptying a field to retype it snapped it to the minimum first.
+  // The text is the user's until they leave the field; only a value already in
+  // range is passed up as they type, and leaving the field settles the rest.
+  const [text, setText] = useState(String(value));
+  const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    if (!editing) setText(String(value));
+  }, [value, editing]);
+
+  const settle = () => {
+    setEditing(false);
+    const typed = Number(text);
+    const settled =
+      text.trim() === "" || !Number.isFinite(typed)
+        ? value
+        : Math.min(max, Math.max(min, Math.round(typed)));
+    setText(String(settled));
+    if (settled !== value) onChange(settled);
+  };
+
   return (
     <div className="setting-row">
       <label htmlFor={id}>{label}</label>
@@ -150,12 +175,19 @@ function NumberSetting({
         <input
           id={id}
           type="number"
-          value={value}
+          value={text}
           min={min}
           max={max}
-          onChange={(event) =>
-            onChange(Math.min(max, Math.max(min, Number(event.target.value) || min)))
-          }
+          onFocus={() => setEditing(true)}
+          onBlur={settle}
+          onChange={(event) => {
+            setEditing(true);
+            setText(event.target.value);
+            const typed = Number(event.target.value);
+            if (event.target.value.trim() !== "" && Number.isInteger(typed) && typed >= min && typed <= max) {
+              onChange(typed);
+            }
+          }}
         />
         <span>{suffix}</span>
       </div>
@@ -208,6 +240,9 @@ function SettingsDialogComponent({
   const [draft, setDraft] = useState(settings);
   const [confirmClear, setConfirmClear] = useState(false);
   const [confirmClearNotifications, setConfirmClearNotifications] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const dialogRef = useRef<HTMLElement>(null);
+  useModalFocus(open, dialogRef);
 
   // Every snapshot the backend broadcasts — a phase ending, a notification
   // being filed — carries a new `settings` object. Seeding the draft from
@@ -221,6 +256,7 @@ function SettingsDialogComponent({
     setDraft(latestSettings.current);
     setConfirmClear(false);
     setConfirmClearNotifications(false);
+    setSaving(false);
   }, [open]);
 
   if (!open) return null;
@@ -237,6 +273,7 @@ function SettingsDialogComponent({
     <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
       <section
         className="dialog settings-dialog"
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-title"
@@ -251,7 +288,14 @@ function SettingsDialogComponent({
         <form
           onSubmit={(event) => {
             event.preventDefault();
-            void onSave(draft).then(onClose);
+            if (saving) return;
+            setSaving(true);
+            // Only a save that happened closes the dialog. Closing on a refused
+            // one discarded every edit along with the error that explained why.
+            void onSave(draft).then((saved) => {
+              setSaving(false);
+              if (saved) onClose();
+            });
           }}
         >
           <div className="settings-scroll">
