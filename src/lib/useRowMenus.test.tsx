@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { cleanup, renderHook } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { placeMenu, useRowMenus } from "./useRowMenus";
 
 afterEach(() => {
@@ -96,5 +96,27 @@ describe("useRowMenus", () => {
     toggle(details, true);
     document.body.dispatchEvent(new Event("scroll"));
     expect(details.open).toBe(false);
+  });
+
+  it("closes when its row is pushed somewhere else by the list changing", async () => {
+    // No scroll and no resize: a notification filed above the row just moves it,
+    // and the pinned menu would be left beside a different row.
+    renderHook(() => useRowMenus());
+    const details = menu();
+    const button = details.querySelector("summary")!;
+    let top = 100;
+    vi.spyOn(button, "getBoundingClientRect").mockImplementation(
+      () => ({ top, bottom: top + 40, right: 250 }) as DOMRect,
+    );
+    toggle(details, true);
+
+    // The list changes but this row stays put: the menu stays.
+    document.body.append(document.createElement("p"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(details.open).toBe(true);
+
+    top = 146;
+    document.body.prepend(document.createElement("p"));
+    await waitFor(() => expect(details.open).toBe(false));
   });
 });

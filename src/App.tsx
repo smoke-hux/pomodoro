@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Clock3, Inbox, Menu, Monitor, Moon, Settings as SettingsIcon, Sun } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./lib/api";
-import { getCompletedFocusCount, getCompletedFocusMinutes, getTodayFocusSessions } from "./lib/metrics";
+import { getCompletedFocusCount, getCompletedFocusMinutes, getLocalDateKey } from "./lib/metrics";
 import { applyTheme, nextTheme, resolveTheme, useSystemDark } from "./lib/theme";
 import { useCountdown } from "./lib/useCountdown";
 import { useDayKey } from "./lib/useDayKey";
@@ -188,12 +188,13 @@ export default function App() {
   // Changes at midnight, so "today" rolls over in a window left open overnight.
   const dayKey = useDayKey();
   const todaySummary = useMemo(() => {
-    const today = getTodayFocusSessions(snapshot.sessions, Date.now());
+    const today = snapshot.sessions.filter(
+      (session) => getLocalDateKey(session.startedAt) === dayKey,
+    );
     return {
       count: getCompletedFocusCount(today),
       minutes: Math.round(getCompletedFocusMinutes(today)),
     };
-    // dayKey is not read: it stands in for the clock, which a memo cannot depend on.
   }, [snapshot.sessions, dayKey]);
 
   // Dialogs are modal, so remember what had focus and hand it back on close.
@@ -314,7 +315,15 @@ export default function App() {
     setAddRequest((count) => count + 1);
   }, []);
   const openCapture = useCallback(() => openDialog(setCaptureOpen), [openDialog]);
-  const openSettings = useCallback(() => openDialog(setSettingsOpen), [openDialog]);
+  // Until the stored settings have arrived the snapshot holds the defaults, and
+  // anything that saves settings would write those defaults over the real ones.
+  const openSettings = useCallback(() => {
+    if (!settingsLoaded) {
+      showNotice("Settings are not available until Pomodoro has read its local data.");
+      return;
+    }
+    openDialog(setSettingsOpen);
+  }, [openDialog, settingsLoaded, showNotice]);
   const closeCapture = useCallback(() => closeDialog(setCaptureOpen), [closeDialog]);
   const closeSettings = useCallback(() => closeDialog(setSettingsOpen), [closeDialog]);
 
@@ -415,9 +424,14 @@ export default function App() {
   const settings = snapshot.settings;
   const requestedTheme = useRef<ThemePreference | null>(null);
   useEffect(() => {
-    requestedTheme.current = null;
+    // Only the broadcast that carries the requested theme settles it. An
+    // earlier save's broadcast arriving first must not, or a click in the
+    // gap before the later one repeats a request.
+    if (requestedTheme.current === settings.theme) requestedTheme.current = null;
   }, [settings.theme]);
   const cycleTheme = useCallback(() => {
+    // The same guard as openSettings: this sends the whole settings object.
+    if (!settingsLoaded) return;
     const next = nextTheme(requestedTheme.current ?? settings.theme);
     if (!inTauri) {
       // The browser preview has no backend to save to; the theme is the one
@@ -430,9 +444,10 @@ export default function App() {
       () => api.updateSettings({ ...settings, theme: next }),
       `Theme: ${themeLabels[next]}.`,
     ).then((saved) => {
-      if (!saved) requestedTheme.current = null;
+      // A failure withdraws its own request, not a later one made since.
+      if (!saved && requestedTheme.current === next) requestedTheme.current = null;
     });
-  }, [inTauri, run, settings]);
+  }, [inTauri, run, settings, settingsLoaded]);
 
   useRowMenus();
 
@@ -540,6 +555,7 @@ export default function App() {
           className="icon-button"
           type="button"
           onClick={cycleTheme}
+          disabled={!settingsLoaded}
           aria-label={`${themeTitle}. Switch to ${themeLabels[nextTheme(theme)]}`}
           title={`${themeTitle} — click for ${themeLabels[nextTheme(theme)]}`}
         >

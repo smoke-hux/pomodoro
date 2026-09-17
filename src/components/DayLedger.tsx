@@ -1,42 +1,33 @@
 import { memo } from "react";
 import { ChevronDown } from "lucide-react";
+import { getCompletedFocusMinutes, getLocalDateKey } from "../lib/metrics";
 import type { FocusTask, Interruption, SessionRecord } from "../types";
 
 interface DayLedgerProps {
-  /** Today's local date. Not read — a new value at midnight is what gets the memoised ledger to work "today" out again. */
+  /** Today's local date. "Today" is whatever falls on it, so the ledger rolls over when it changes at midnight. */
   dayKey: string;
   sessions: SessionRecord[];
   tasks: FocusTask[];
   interruptions: Interruption[];
 }
 
-function isToday(timestamp: number) {
-  const date = new Date(timestamp);
-  const now = new Date();
-  return (
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth() &&
-    date.getDate() === now.getDate()
-  );
-}
-
 function minutes(seconds: number) {
   return Math.max(1, Math.round(seconds / 60));
 }
 
-function DayLedgerComponent({ sessions, tasks, interruptions }: DayLedgerProps) {
+function DayLedgerComponent({ dayKey, sessions, tasks, interruptions }: DayLedgerProps) {
+  const isToday = (timestamp: number) => getLocalDateKey(timestamp) === dayKey;
   const today = sessions
     .filter((session) => isToday(session.startedAt))
     .sort((a, b) => b.startedAt - a.startedAt);
   const focus = today.filter(
     (session) => session.phase === "focus" && session.outcome === "completed",
   );
-  const focusMinutes = focus.reduce(
-    (total, session) => total + minutes(session.durationSeconds),
-    0,
-  );
+  // The same sum the toolbar shows. Adding up each row's rounded minutes
+  // instead let the two totals disagree on the same screen.
+  const focusMinutes = Math.round(getCompletedFocusMinutes(focus));
   const planned = tasks
-    .filter((task) => !task.done || isToday(task.completedAt ?? 0))
+    .filter((task) => !task.done || (task.completedAt !== null && isToday(task.completedAt)))
     .reduce((total, task) => total + task.estimate, 0);
   const todayInterruptions = interruptions.filter((item) => isToday(item.capturedAt));
 

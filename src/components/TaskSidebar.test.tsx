@@ -137,4 +137,27 @@ describe("completed tasks", () => {
     expect(screen.getByRole("button", { name: "Delete Done last week" })).toBeTruthy();
     expect(onDeleteTask).not.toHaveBeenCalled();
   });
+
+  it("cancels the confirmation on Escape and hands focus back to the row", async () => {
+    const { onDeleteTask } = renderSidebar([
+      task({ id: "b", title: "Done last week", done: true, completedAt: NOW - 6 * DAY }),
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Delete Done last week" }));
+    const confirm = screen.getByRole("button", { name: /Confirm deleting/ });
+    expect(document.activeElement).toBe(confirm);
+
+    const reachedWindow = vi.fn();
+    window.addEventListener("keydown", reachedWindow);
+    fireEvent.keyDown(confirm, { key: "Escape" });
+    window.removeEventListener("keydown", reachedWindow);
+
+    // The window-level handler would have closed the sidebar on the same key.
+    expect(reachedWindow).not.toHaveBeenCalled();
+    expect(onDeleteTask).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "Delete Done last week" }),
+      ),
+    );
+  });
 });

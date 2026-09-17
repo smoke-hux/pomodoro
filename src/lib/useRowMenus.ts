@@ -71,10 +71,39 @@ function closeAll(except?: Node | null) {
  * Window-level behaviour for the rows' "more actions" menus, which are plain
  * <details> elements: places each one as it opens, and closes it when the user
  * presses anywhere else or opens another — so only one is ever open — or when
- * what it is attached to moves.
+ * what it is attached to moves, whether by scrolling, resizing or the list
+ * changing underneath it.
  */
 export function useRowMenus() {
   useEffect(() => {
+    // A placed menu is pinned to the window, not to its row. Scrolling and
+    // resizing announce themselves; a row pushed down by a notification filed
+    // above it, or by the add-task form opening, does not. So while a menu is
+    // open the page is watched, and if its button is no longer where the menu
+    // was placed against, the menu closes rather than sit beside another row
+    // while still acting on the first.
+    let watcher: MutationObserver | null = null;
+    const unwatch = () => {
+      watcher?.disconnect();
+      watcher = null;
+    };
+    const watch = (menu: HTMLDetailsElement) => {
+      unwatch();
+      const button = menu.querySelector("summary");
+      if (!button) return;
+      const placedAt = button.getBoundingClientRect();
+      watcher = new MutationObserver(() => {
+        const now = button.getBoundingClientRect();
+        const moved =
+          Math.abs(now.top - placedAt.top) > 1 || Math.abs(now.right - placedAt.right) > 1;
+        if (moved || !menu.isConnected) {
+          menu.open = false;
+          unwatch();
+        }
+      });
+      watcher.observe(document.body, { childList: true, subtree: true, characterData: true });
+    };
+
     // `toggle` does not bubble; capturing sees it for every menu.
     const onToggle = (event: Event) => {
       const menu = event.target;
@@ -83,12 +112,14 @@ export function useRowMenus() {
         // Placed afresh on every open; until then the stylesheet keeps the
         // popover hidden, so it is never seen where it was last time.
         delete menu.dataset.placed;
+        if (!document.querySelector(`${MENU_SELECTOR}[open]`)) unwatch();
         return;
       }
       // A menu opened from the keyboard arrives with no pointer press, so the
       // one before it has to be closed here as well.
       closeAll(menu);
       position(menu);
+      watch(menu);
     };
     const onPointerDown = (event: PointerEvent) =>
       closeAll(event.target instanceof Node ? event.target : null);
@@ -99,6 +130,7 @@ export function useRowMenus() {
     document.addEventListener("scroll", onMove, true);
     window.addEventListener("resize", onMove);
     return () => {
+      unwatch();
       document.removeEventListener("toggle", onToggle, true);
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("scroll", onMove, true);

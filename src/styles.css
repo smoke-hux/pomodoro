@@ -511,6 +511,18 @@ summary:focus-visible,
   border-top: 1px solid var(--divider);
 }
 
+.completed-groups {
+  flex: 0 0 auto;
+  max-height: 38%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.completed-groups > .completed-group {
+  max-height: none;
+  overflow: visible;
+}
+
 .completed-group > summary {
   min-height: 40px;
   padding: 10px 16px;

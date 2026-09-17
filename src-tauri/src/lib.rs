@@ -176,24 +176,46 @@ fn toggle_label(status: TimerStatus, phase: Phase) -> &'static str {
     }
 }
 
-/// Relabels the tray item, and only when the label actually changes: most
-/// publishes are a task edit or a filed notification, not a timer transition.
+/// Relabels the tray item when the label needs to change.
+///
+/// The relabelling itself always runs on the main thread and works the label
+/// out there, from the state as it is at that moment, not from the snapshot
+/// that prompted it. Two threads can ask at nearly the same time — the timer
+/// thread at a phase end, the main thread on a click — and if each carried
+/// its own label across, the older one could land last and stay until the next
+/// transition. Run in one place and read late, whichever runs last is right.
 fn sync_tray(app: &AppHandle, snapshot: &AppData) {
     let state = app.state::<RuntimeState>();
-    let Some((item, shown)) = state.tray_toggle.get() else {
+    let Some((_, shown)) = state.tray_toggle.get() else {
         return;
     };
+    // Most publishes are a task edit or a filed notification, not a timer
+    // transition; those stop here without troubling the main thread.
     let label = toggle_label(snapshot.timer.status, snapshot.timer.phase);
-    // Released before the item is touched: relabelling hops to the main
-    // thread and waits for it, and the main thread comes through here too
-    // when the tray menu itself is clicked.
-    let changed = shown
-        .lock()
-        .map(|mut shown| std::mem::replace(&mut *shown, label) != label)
-        .unwrap_or(false);
-    if changed {
-        let _ = item.set_text(label);
+    if shown.lock().map(|shown| *shown == label).unwrap_or(true) {
+        return;
     }
+
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let state = handle.state::<RuntimeState>();
+        let Some((item, shown)) = state.tray_toggle.get() else {
+            return;
+        };
+        let Ok(label) = state
+            .data
+            .lock()
+            .map(|data| toggle_label(data.timer.status, data.timer.phase))
+        else {
+            return;
+        };
+        let Ok(mut shown) = shown.lock() else {
+            return;
+        };
+        if *shown != label && item.set_text(label).is_ok() {
+            *shown = label;
+        }
+    });
 }
 
 /// Broadcasts the new state to the window. This is the one channel through

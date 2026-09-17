@@ -10,9 +10,8 @@ const CANVAS: Record<ResolvedTheme, string> = { light: "#f2eee7", dark: "#181512
 
 const ORDER: ThemePreference[] = ["system", "light", "dark"];
 
-function isPreference(value: unknown): value is ThemePreference {
-  return value === "system" || value === "light" || value === "dark";
-}
+/** Read back by public/theme-init.js, which cannot import it. */
+export const THEME_STORAGE_KEY = STORAGE_KEY;
 
 /** The preference after `current` in the toolbar button's System → Light → Dark cycle. */
 export function nextTheme(current: ThemePreference): ThemePreference {
@@ -26,26 +25,10 @@ export function resolveTheme(preference: ThemePreference, systemDark: boolean): 
 }
 
 /**
- * The preference this window last applied.
- *
- * The real setting lives in the backend store and arrives with the first
- * snapshot, which is after the first paint. Without a local copy a user who
- * chose Dark on a light desktop (or the reverse) sees the wrong theme flash on
- * every launch. Storage can be unavailable; the answer is then "system", which
- * the stylesheet resolves by itself.
- */
-export function readCachedTheme(): ThemePreference {
-  try {
-    const stored = window.localStorage.getItem(STORAGE_KEY);
-    return isPreference(stored) ? stored : "system";
-  } catch {
-    return "system";
-  }
-}
-
-/**
  * Puts a preference on the root element, where the stylesheet reads it, and
- * remembers it for the next launch. "system" is resolved by the stylesheet's
+ * remembers it for the next launch. The real setting lives in the backend
+ * store and arrives with the first snapshot, which is after the first paint;
+ * public/theme-init.js reads this local copy back before anything is drawn. "system" is resolved by the stylesheet's
  * own `prefers-color-scheme` block, so a desktop switching between light and
  * dark repaints the window without any script running.
  */

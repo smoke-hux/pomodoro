@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
   Check,
   CheckCircle2,
@@ -197,11 +197,25 @@ function TaskSidebarComponent({
 
   // A completed row's delete is a single small button beside "reopen", so it
   // asks once, the way Skip does, and stands down by itself if left alone.
+  //
+  // Standing down removes the confirm button, which has focus. Focus goes back
+  // to the row's delete button rather than dropping to <body>.
+  const completedRef = useRef<HTMLDivElement>(null);
+  const cancelConfirmDelete = useCallback((id: string) => {
+    const hadFocus = document.activeElement?.matches(".row-delete.confirming") ?? false;
+    setConfirmDeleteId((current) => (current === id ? null : current));
+    if (!hadFocus) return;
+    requestAnimationFrame(() => {
+      for (const row of completedRef.current?.querySelectorAll<HTMLElement>("[data-task-id]") ?? []) {
+        if (row.dataset.taskId === id) row.querySelector<HTMLElement>(".row-delete")?.focus();
+      }
+    });
+  }, []);
   useEffect(() => {
     if (confirmDeleteId === null) return;
-    const timeout = window.setTimeout(() => setConfirmDeleteId(null), 4_000);
+    const timeout = window.setTimeout(() => cancelConfirmDelete(confirmDeleteId), 4_000);
     return () => window.clearTimeout(timeout);
-  }, [confirmDeleteId]);
+  }, [confirmDeleteId, cancelConfirmDelete]);
 
   // Opening the editor replaces the row, and with it the menu button that had
   // focus. When the editor closes, focus goes back to that row rather than
@@ -225,6 +239,7 @@ function TaskSidebarComponent({
     <div
       className={`task-row completed${confirmDeleteId === task.id ? " confirming" : ""}`}
       key={task.id}
+      data-task-id={task.id}
     >
       <button
         className="task-check"
@@ -242,6 +257,12 @@ function TaskSidebarComponent({
           onClick={() => {
             setConfirmDeleteId(null);
             onDeleteTask(task.id);
+          }}
+          onKeyDown={(event) => {
+            // Escape answers the question; it should not also close the sidebar.
+            if (event.key !== "Escape") return;
+            event.stopPropagation();
+            cancelConfirmDelete(task.id);
           }}
           // No cancel-on-blur: WebKit does not keep focus on a button being
           // clicked, so the press itself blurred this and withdrew the
@@ -376,18 +397,22 @@ function TaskSidebarComponent({
           )}
         </div>
 
-        {completedToday.length > 0 && (
-          <details className="completed-group">
-            <summary>Completed today ({completedToday.length})</summary>
-            {completedToday.map(completedRow)}
-          </details>
-        )}
-        {completedEarlier.length > 0 && (
-          <details className="completed-group">
-            <summary>Completed earlier ({completedEarlier.length})</summary>
-            {completedEarlier.map(completedRow)}
-          </details>
-        )}
+        {/* One scrolling area for both groups: capped separately, two open
+            groups could take three quarters of the section between them. */}
+        <div className="completed-groups" ref={completedRef}>
+          {completedToday.length > 0 && (
+            <details className="completed-group">
+              <summary>Completed today ({completedToday.length})</summary>
+              {completedToday.map(completedRow)}
+            </details>
+          )}
+          {completedEarlier.length > 0 && (
+            <details className="completed-group">
+              <summary>Completed earlier ({completedEarlier.length})</summary>
+              {completedEarlier.map(completedRow)}
+            </details>
+          )}
+        </div>
       </section>
 
       <section className="sidebar-section inbox-section" aria-labelledby="inbox-heading">

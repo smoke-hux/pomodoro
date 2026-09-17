@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyTheme, nextTheme, readCachedTheme, resolveTheme, useSystemDark } from "./theme";
+import themeInit from "../../public/theme-init.js?raw";
+import { applyTheme, nextTheme, resolveTheme, THEME_STORAGE_KEY, useSystemDark } from "./theme";
+
+/** Runs the real pre-paint script the way the page does: as a classic script. */
+function runThemeInit() {
+  new Function(themeInit)();
+}
 
 /** A stand-in for the desktop's appearance setting that tests can flip. */
 function installSystemScheme(initiallyDark: boolean) {
@@ -49,16 +55,27 @@ describe("resolving a preference", () => {
 });
 
 describe("applying a preference", () => {
-  it("puts it where the stylesheet reads it and remembers it for the next launch", () => {
+  it("puts it where the stylesheet reads it", () => {
     applyTheme("dark", false);
     expect(document.documentElement.dataset.theme).toBe("dark");
-    expect(readCachedTheme()).toBe("dark");
   });
 
-  it("falls back to System when nothing usable is remembered", () => {
-    expect(readCachedTheme()).toBe("system");
-    window.localStorage.setItem("pomodoro.theme", "sepia");
-    expect(readCachedTheme()).toBe("system");
+  it("is what the pre-paint script restores on the next launch", () => {
+    applyTheme("dark", false);
+    // A new launch: the markup says "system" until the script has run.
+    document.documentElement.dataset.theme = "system";
+    runThemeInit();
+    expect(document.documentElement.dataset.theme).toBe("dark");
+  });
+
+  it("leaves the markup's System alone when nothing usable is remembered", () => {
+    document.documentElement.dataset.theme = "system";
+    runThemeInit();
+    expect(document.documentElement.dataset.theme).toBe("system");
+
+    window.localStorage.setItem(THEME_STORAGE_KEY, "sepia");
+    runThemeInit();
+    expect(document.documentElement.dataset.theme).toBe("system");
   });
 
   it("keeps the theme-color meta in step with what is on screen", () => {
