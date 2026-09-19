@@ -110,13 +110,16 @@ Pomodoro is served from its own apt repository, so it installs and updates like 
     sudo install -d -m 0755 /etc/apt/keyrings
     curl -fsSL https://smoke-hux.github.io/pomodoro/pomodoro.gpg \
         | sudo tee /etc/apt/keyrings/pomodoro.gpg > /dev/null
+    sudo chmod a+r /etc/apt/keyrings/pomodoro.gpg
     echo "deb [signed-by=/etc/apt/keyrings/pomodoro.gpg] https://smoke-hux.github.io/pomodoro stable main" \
-        | sudo tee /etc/apt/sources.list.d/pomodoro.list
+        | sudo tee /etc/apt/sources.list.d/pomodoro.list > /dev/null
     sudo apt update
 
 Then:
 
     sudo apt install pomodoro
+
+The key is made readable on purpose: apt verifies signatures as its own unprivileged user, and `sudo tee` would otherwise create the file under whatever umask you happen to have.
 
 From then on `sudo apt upgrade` brings new versions with the rest of the system. The key is restricted to this one repository by `signed-by`, so it can never sign anything else on the machine. To remove Pomodoro and the repository:
 
@@ -210,9 +213,12 @@ Build a Debian package:
 
 A release is a tag. Pushing `v0.1.1` builds the package on Ubuntu 22.04, attaches it to a GitHub release, and rebuilds the apt repository from the packages of every release so far, so an older version stays installable while people upgrade. The workflow is `.github/workflows/release.yml`; it refuses to build if the tag and the two version fields disagree.
 
-    # set the same version in package.json and src-tauri/tauri.conf.json first
+    # set the same version in package.json, src-tauri/tauri.conf.json
+    # and src-tauri/Cargo.toml first
     git tag v0.1.1
     git push origin v0.1.1
+
+Re-running a tag's workflow is safe: it replaces the packages on the release that already exists rather than failing, so a publish that broke on its last step can be retried from the Actions tab.
 
 The repository itself is built by `scripts/build-apt-repo.sh`, which takes an output directory and any number of `.deb` files, arranges them into a pool, writes the indexes, signs them, and exports the public key beside them. It runs anywhere apt does, so a repository can be built and tested locally before any of it is published:
 
@@ -228,5 +234,6 @@ The published repository is a static site on GitHub Pages, signed by a GPG key t
 2. Keep the secret key somewhere safe outside the repository. Losing it means every user has to install a new key by hand.
 3. Add two repository secrets: `APT_SIGNING_KEY`, the armoured secret key from `gpg --armor --export-secret-keys <key>`, and `APT_SIGNING_PASSPHRASE`, its passphrase.
 4. Under Settings → Pages, set the source to GitHub Actions.
+5. Under Settings → Environments → github-pages, add `v*` to the deployment branch and tag rules. GitHub creates that environment restricted to the default branch, and a release is a tag, so without this every tagged release builds and publishes a release and then fails on its very last step.
 
 Run the workflow by hand from the Actions tab to publish the repository without cutting a release; it rebuilds from the releases that already exist.

@@ -10,31 +10,46 @@ name: Release
 #
 # Needs two repository secrets: APT_SIGNING_KEY, an armoured secret GPG key,
 # and APT_SIGNING_PASSPHRASE, its passphrase (empty if it has none). Pages
-# must be set to deploy from GitHub Actions.
+# must be set to deploy from GitHub Actions, and the github-pages
+# environment must allow tags to deploy: it is created restricted to the
+# default branch, which would fail every tagged release on its last step.
+# Settings -> Environments -> github-pages -> Deployment branches and tags
+# needs a rule for `v*`.
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
 
+# Writing to contents belongs to the one job that creates a release, not to
+# the job holding the signing key.
 permissions:
-  contents: write
-  pages: write
-  id-token: write
+  contents: read
 
-# Never let two publishes race for the same Pages deployment.
+# Per ref, because a group shared by every tag drops a queued run: pushing
+# three tags together would leave the middle one cancelled, with no package
+# and no release. Publishes are serialised on their own job instead.
 concurrency:
-  group: release
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   package:
     name: Build package
     # A manual run republishes packages that already exist, so only a tag
-    # spends a compile.
-    if: startsWith(github.ref, 'refs/tags/v')
+    # push spends a compile. Keyed on the event, not the ref: a manual run
+    # can be launched from a tag, and building that tag again would fail on
+    # the release that already exists.
+    if: github.event_name == 'push'
     # The oldest release still supported: glibc and WebKit symbols resolve
     # forwards, so a package built here also installs on 24.04 and newer.
+    # GitHub began deprecating this image on 2026-09-17 and removes it on
+    # 2027-04-17, with brownouts before then; a brownout fails this job
+    # loudly and stops the publish rather than republishing silently. When
+    # it goes, either build in a `container: ubuntu:22.04` on a supported
+    # runner, which pins the build glibc independently of the image, or move
+    # to ubuntu-24.04 and drop the 22.04 claim from the README and the
+    # repository's own page.
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
@@ -76,6 +91,13 @@ jobs:
               exit 1
             }
           done
+          # Not the version the package carries — Tauri takes that from
+          # tauri.conf.json — but the one compiled into the binary.
+          version=$(sed -n '0,/^version = /s/^version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml)
+          [ "$version" = "$tag" ] || {
+            echo "::error::src-tauri/Cargo.toml is version $version but the tag is $tag"
+            exit 1
+          }
 
       - name: Build the Debian package
         run: npm run tauri build -- --bundles deb
@@ -92,14 +114,33 @@ jobs:
   release:
     name: GitHub release
     needs: package
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: deb
           path: deb
 
+      # Named the way Debian names packages, because this file is what
+      # someone downloads when they install without adding the repository,
+      # and the pool carries the same name.
+      - name: Name the package for Debian
+        run: |
+          for deb in deb/*.deb; do
+            name=$(dpkg-deb -f "$deb" Package)
+            version=$(dpkg-deb -f "$deb" Version)
+            arch=$(dpkg-deb -f "$deb" Architecture)
+            canonical="deb/${name}_${version}_${arch}.deb"
+            [ "$deb" = "$canonical" ] || mv "$deb" "$canonical"
+          done
+          ls -l deb
+
+      # Re-runnable: a release that already exists has its packages
+      # replaced rather than failing the job, so a publish that failed can
+      # be retried from the Actions tab.
       - name: Attach the package to the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -108,20 +149,40 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
+            deb/*.deb \
+          || gh release upload "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber \
             deb/*.deb
 
   publish:
     name: Publish apt repository
-    needs: release
-    # A manual run republishes what is already released, so it does not wait
-    # for a release job that only runs for a tag.
-    if: always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    # Both jobs, not just the release: `needs.*` covers only direct needs,
+    # and a failed package leaves the release *skipped*, which would let a
+    # publish through for a tag that never produced a package. `!cancelled()`
+    # rather than `always()`, which also runs on a cancelled run.
+    needs: [package, release]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     runs-on: ubuntu-24.04
+    # One publish at a time across the whole repository. Losing a queued one
+    # is harmless here: every publish rebuilds from all releases, so the one
+    # that runs is complete.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v5
+
+      # apt-ftparchive, which builds the indexes. It is not part of the
+      # runner image's declared toolset, so it is installed rather than
+      # assumed.
+      - name: Install apt-utils
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y apt-utils
 
       # Every release, not just this one: apt serves whatever the indexes
       # list, so dropping the older packages would strand anyone mid-upgrade.
@@ -129,18 +190,48 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -o pipefail
           mkdir -p packages
-          tags=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+
+          limit=1000
+          # Only the tags this workflow publishes. Another release carrying a
+          # .deb would otherwise be pulled into the pool, and a version
+          # colliding with one already collected fails every publish from
+          # then on.
+          tags=$(gh release list --repo "$GITHUB_REPOSITORY" --limit "$limit" \
                    --json tagName,isDraft \
-                   --jq '.[] | select(.isDraft | not) | .tagName')
+                   --jq '.[] | select(.isDraft | not) | .tagName
+                         | select(test("^v[0-9]"))')
           [ -n "$tags" ] || { echo "::error::no published releases to build from"; exit 1; }
+          # A truncated listing would quietly drop the oldest packages out of
+          # the pool, which is the one thing rebuilding from every release is
+          # meant to prevent.
+          [ "$(printf '%s\n' "$tags" | wc -l)" -lt "$limit" ] \
+            || { echo "::error::more than $limit releases; the listing is truncated"; exit 1; }
+
           for tag in $tags; do
+            # Asked separately, because `gh release download` exits non-zero
+            # for a network or API failure exactly as it does for a release
+            # with nothing to download. Treating the two alike would publish
+            # a repository missing whatever failed to arrive.
+            debs=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
+                     --json assets \
+                     --jq '[.assets[].name | select(endswith(".deb"))] | length')
+            if [ "$debs" -eq 0 ]; then
+              echo "::warning::$tag has no .deb attached; skipping"
+              continue
+            fi
             gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
-              --pattern '*.deb' --dir "packages/$tag" || {
-                echo "::warning::$tag has no .deb attached; skipping"
-                continue
-              }
+              --pattern '*.deb' --dir "packages/$tag"
           done
+
+          # The release this run just made must be in the pool, or the
+          # publish would announce a version it does not serve.
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            ls "packages/$GITHUB_REF_NAME"/*.deb >/dev/null 2>&1 \
+              || { echo "::error::no package for $GITHUB_REF_NAME to publish"; exit 1; }
+          fi
+
           find packages -name '*.deb' -print | sort
 
       - name: Import the signing key
@@ -158,7 +249,11 @@ jobs:
           APT_SIGNING_PASSPHRASE: ${{ secrets.APT_SIGNING_PASSPHRASE }}
           APT_REPO_URL: ${{ format('https://{0}.github.io/{1}', github.repository_owner, github.event.repository.name) }}
         run: |
+          set -o pipefail
+          # mapfile carries its own exit status, never the pipeline's, so the
+          # count is checked rather than trusted.
           mapfile -t debs < <(find packages -name '*.deb' | sort)
+          [ "${#debs[@]}" -gt 0 ] || { echo "::error::no packages to publish"; exit 1; }
           scripts/build-apt-repo.sh site "${debs[@]}"
 
       - uses: actions/configure-pages@v5

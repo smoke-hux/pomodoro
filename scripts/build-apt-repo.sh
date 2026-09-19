@@ -14,6 +14,10 @@
 #   pool/main/p/pomodoro/*.deb         the packages
 #   dists/stable/...                   the indexes apt reads, and their signature
 #
+# The whole repository is built in a temporary directory and moved into
+# place only once it is complete and signed, so a run that fails leaves
+# whatever was already being served untouched.
+#
 # Signing uses the secret key in the current GnuPG home. Environment:
 #
 #   APT_SIGNING_KEY_ID       which key to sign with; needed only when the
@@ -39,11 +43,33 @@ shift
 url=${APT_REPO_URL:-$DEFAULT_URL}
 url=${url%/}
 
+# Every package is read and checked before anything is written, so that a
+# bad argument cannot cost the repository that is already there.
+declare -A seen=()
+declare -A archs=()
+pool_paths=()
+for deb in "$@"; do
+  [ -f "$deb" ] || die "$deb: no such file"
+  name=$(dpkg-deb -f "$deb" Package)
+  version=$(dpkg-deb -f "$deb" Version)
+  arch=$(dpkg-deb -f "$deb" Architecture)
+  [ "$name" = pomodoro ] || die "$deb is package '$name', not 'pomodoro'"
+  [ -n "$version" ] && [ -n "$arch" ] || die "$deb: no version or architecture"
+  [ -z "${seen[$version/$arch]:-}" ] \
+    || die "$deb: version $version for $arch was given twice"
+  seen[$version/$arch]=$deb
+  archs[$arch]=1
+  # Debian leaves the epoch out of a pool file name.
+  pool_paths+=("pool/$COMPONENT/${name:0:1}/$name/${name}_${version#*:}_${arch}.deb")
+done
+
 # Refuse to sign with a guess. An apt repository signed by the wrong key
 # looks fine until every user's `apt update` fails.
 key=${APT_SIGNING_KEY_ID:-}
 if [ -z "$key" ]; then
-  mapfile -t secret_keys < <(gpg --batch --list-secret-keys --with-colons | awk -F: '$1 == "sec" { print $5 }')
+  listing=$(gpg --batch --list-secret-keys --with-colons) \
+    || die "could not read the GnuPG keyring"
+  mapfile -t secret_keys < <(printf '%s\n' "$listing" | awk -F: '$1 == "sec" { print $5 }')
   case ${#secret_keys[@]} in
     0) die "no secret key in the GnuPG home; import the signing key first" ;;
     1) key=${secret_keys[0]} ;;
@@ -63,28 +89,26 @@ sign() {
   fi
 }
 
-rm -rf "$out"
-mkdir -p "$out"
-out=$(cd "$out" && pwd)
+# The output directory is not touched until the very end. Until then
+# everything happens in a sibling directory, so the move into place is a
+# rename on the same filesystem rather than a copy.
+parent=$(dirname "$out")
+mkdir -p "$parent"
+parent=$(cd "$parent" && pwd)
+out="$parent/$(basename "$out")"
+work=$(mktemp -d "$out.new.XXXXXX")
+release=$(mktemp)
+trap 'rm -rf "$work" "$release"' EXIT
 
-# Packages go into the pool under their canonical Debian file name, whatever
-# the bundler called them (Tauri writes Pomodoro_0.1.0_amd64.deb).
-declare -A archs=()
+i=0
 for deb in "$@"; do
-  [ -f "$deb" ] || die "$deb: no such file"
-  name=$(dpkg-deb -f "$deb" Package)
-  version=$(dpkg-deb -f "$deb" Version)
-  arch=$(dpkg-deb -f "$deb" Architecture)
-  [ "$name" = pomodoro ] || die "$deb is package '$name', not 'pomodoro'"
-  dir="$out/pool/$COMPONENT/${name:0:1}/$name"
-  mkdir -p "$dir"
-  dest="$dir/${name}_${version}_${arch}.deb"
-  [ ! -e "$dest" ] || die "$deb: version $version for $arch was given twice"
+  dest="$work/${pool_paths[$i]}"
+  mkdir -p "$(dirname "$dest")"
   install -m 0644 "$deb" "$dest"
-  archs[$arch]=1
+  i=$((i + 1))
 done
 
-cd "$out"
+cd "$work"
 for arch in "${!archs[@]}"; do
   bin="dists/$SUITE/$COMPONENT/binary-$arch"
   mkdir -p "$bin"
@@ -93,10 +117,16 @@ for arch in "${!archs[@]}"; do
   gzip -9 --keep --no-name "$bin/Packages"
 done
 
-# Written beside the tree and moved in afterwards, so that the Release file
+# apt-ftparchive reports a package it could not read on stderr and carries
+# on, so a truncated .deb would be dropped from the index while the run
+# still succeeded: present in the pool, signed for, and uninstallable.
+for path in "${pool_paths[@]}"; do
+  grep -qxF "Filename: $path" "dists/$SUITE/$COMPONENT/binary-"*/Packages \
+    || die "$path is in the pool but not in any index; the .deb is probably corrupt"
+done
+
+# Written outside the tree and moved in afterwards, so that the Release file
 # does not list a half-written copy of itself.
-release=$(mktemp)
-trap 'rm -f "$release"' EXIT
 apt-ftparchive \
   -o APT::FTPArchive::Release::Origin=Pomodoro \
   -o APT::FTPArchive::Release::Label=Pomodoro \
@@ -113,11 +143,16 @@ sign --armor --detach-sign --output "dists/$SUITE/Release.gpg" "dists/$SUITE/Rel
 
 gpg --batch --yes --export "$key" > pomodoro.gpg
 gpg --batch --yes --armor --export "$key" > pomodoro.asc
-[ -s pomodoro.gpg ] || die "could not export the public key for $key"
+[ -s pomodoro.gpg ] && [ -s pomodoro.asc ] \
+  || die "could not export the public key for $key"
 
 # GitHub Pages runs sites through Jekyll unless told not to.
 touch .nojekyll
 
+# The keyring is read by apt's unprivileged _apt user, so it is made
+# readable explicitly: `sudo tee` would otherwise create it under the
+# caller's umask, and a umask of 077 breaks `apt update` on that machine
+# alone.
 cat > index.html <<HTML
 <!doctype html>
 <html lang="en">
@@ -133,12 +168,26 @@ cat > index.html <<HTML
 <p>Packages of <a href="https://github.com/smoke-hux/pomodoro">Pomodoro</a>, a local-first focus timer, for Ubuntu 22.04 or newer on x86-64. Add the repository once:</p>
 <pre>sudo install -d -m 0755 /etc/apt/keyrings
 curl -fsSL $url/pomodoro.gpg | sudo tee /etc/apt/keyrings/pomodoro.gpg &gt;/dev/null
-echo "deb [signed-by=/etc/apt/keyrings/pomodoro.gpg] $url $SUITE $COMPONENT" | sudo tee /etc/apt/sources.list.d/pomodoro.list
+sudo chmod a+r /etc/apt/keyrings/pomodoro.gpg
+echo "deb [signed-by=/etc/apt/keyrings/pomodoro.gpg] $url $SUITE $COMPONENT" | sudo tee /etc/apt/sources.list.d/pomodoro.list &gt;/dev/null
 sudo apt update</pre>
 <p>Then install, and from then on receive updates with the rest of the system:</p>
 <pre>sudo apt install pomodoro</pre>
 </html>
 HTML
 
+cd "$parent"
+# The old tree is moved aside rather than deleted first, so that the window
+# in which neither the old nor the new repository is in place is a single
+# rename rather than a recursive delete.
+previous=
+if [ -e "$out" ]; then
+  previous="$out.old.$$"
+  mv "$out" "$previous"
+fi
+mv "$work" "$out"
+trap 'rm -f "$release"' EXIT
+[ -z "$previous" ] || rm -rf "$previous"
+
 echo "apt repository written to $out, signed by $key:"
-find . -type f | sort | sed 's|^\./|  |'
+( cd "$out" && find . -type f | sort | sed 's|^\./|  |' )
