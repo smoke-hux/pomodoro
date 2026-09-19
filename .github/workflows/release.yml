@@ -1,0 +1,171 @@
+name: Release
+
+# Publishes the apt repository at https://smoke-hux.github.io/pomodoro.
+#
+# Tagging a version (v0.1.0) builds the .deb, attaches it to a GitHub
+# release, and rebuilds the repository from every .deb of every release so
+# far, so that an upgrade never removes the version it replaces. The
+# workflow can also be run by hand to republish the current releases
+# without cutting a new one.
+#
+# Needs two repository secrets: APT_SIGNING_KEY, an armoured secret GPG key,
+# and APT_SIGNING_PASSPHRASE, its passphrase (empty if it has none). Pages
+# must be set to deploy from GitHub Actions.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+# Never let two publishes race for the same Pages deployment.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Build package
+    # A manual run republishes packages that already exist, so only a tag
+    # spends a compile.
+    if: startsWith(github.ref, 'refs/tags/v')
+    # The oldest release still supported: glibc and WebKit symbols resolve
+    # forwards, so a package built here also installs on 24.04 and newer.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+
+      # The tag is the single source of the version: a tag that disagrees
+      # with the manifests would publish a package users cannot upgrade to.
+      - name: Check the tag against the manifests
+        run: |
+          tag=${GITHUB_REF_NAME#v}
+          for file in package.json src-tauri/tauri.conf.json; do
+            version=$(node -p "require('./$file').version")
+            [ "$version" = "$tag" ] || {
+              echo "::error::$file is version $version but the tag is $tag"
+              exit 1
+            }
+          done
+
+      - name: Build the Debian package
+        run: npm run tauri build -- --bundles deb
+
+      # Tauri names the file after the product ("Pomodoro_0.1.0_amd64.deb");
+      # the repository builder renames it to the Debian convention.
+      - name: Upload the package
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: src-tauri/target/release/bundle/deb/*.deb
+          if-no-files-found: error
+
+  release:
+    name: GitHub release
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: deb
+          path: deb
+
+      - name: Attach the package to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            deb/*.deb
+
+  publish:
+    name: Publish apt repository
+    needs: release
+    # A manual run republishes what is already released, so it does not wait
+    # for a release job that only runs for a tag.
+    if: always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # Every release, not just this one: apt serves whatever the indexes
+      # list, so dropping the older packages would strand anyone mid-upgrade.
+      - name: Collect the packages of every release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p packages
+          tags=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+                   --json tagName,isDraft \
+                   --jq '.[] | select(.isDraft | not) | .tagName')
+          [ -n "$tags" ] || { echo "::error::no published releases to build from"; exit 1; }
+          for tag in $tags; do
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+              --pattern '*.deb' --dir "packages/$tag" || {
+                echo "::warning::$tag has no .deb attached; skipping"
+                continue
+              }
+          done
+          find packages -name '*.deb' -print | sort
+
+      - name: Import the signing key
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+        run: |
+          [ -n "$APT_SIGNING_KEY" ] || {
+            echo "::error::the APT_SIGNING_KEY secret is not set"
+            exit 1
+          }
+          printf '%s\n' "$APT_SIGNING_KEY" | gpg --batch --import
+
+      - name: Build the repository
+        env:
+          APT_SIGNING_PASSPHRASE: ${{ secrets.APT_SIGNING_PASSPHRASE }}
+          APT_REPO_URL: ${{ format('https://{0}.github.io/{1}', github.repository_owner, github.event.repository.name) }}
+        run: |
+          mapfile -t debs < <(find packages -name '*.deb' | sort)
+          scripts/build-apt-repo.sh site "${debs[@]}"
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
