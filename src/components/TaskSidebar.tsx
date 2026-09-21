@@ -66,6 +66,8 @@ interface TaskComposerProps {
   initialTitle?: string;
   initialEstimate?: number;
   submitLabel: string;
+  /** Raised to take focus again while already open, as Ctrl+N does. */
+  focusRequest?: number;
   onSubmit: (title: string, estimate: number) => Promise<boolean>;
   onCancel: () => void;
 }
@@ -76,6 +78,7 @@ function TaskComposer({
   initialTitle = "",
   initialEstimate = 1,
   submitLabel,
+  focusRequest,
   onSubmit,
   onCancel,
 }: TaskComposerProps) {
@@ -88,6 +91,12 @@ function TaskComposer({
     inputRef.current?.focus();
     inputRef.current?.select();
   }, []);
+
+  // Asked again while open: focus only. Selecting would have the next key
+  // replace a title half typed.
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, [focusRequest]);
 
   const submit = async () => {
     const cleaned = title.trim();
@@ -379,6 +388,7 @@ function TaskSidebarComponent({
           <TaskComposer
             idPrefix="new-task"
             submitLabel="Add"
+            focusRequest={addRequest}
             onSubmit={submitNew}
             onCancel={() => setAdding(false)}
           />

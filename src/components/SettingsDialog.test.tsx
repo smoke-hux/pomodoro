@@ -188,6 +188,64 @@ describe("number fields", () => {
     // Left empty, it goes back to what it was rather than to the minimum.
     expect(field.value).toBe("120");
   });
+
+  it("settles what was typed when Enter saves without leaving the field", async () => {
+    // Enter submits the form with the field still focused. The save used to
+    // take the last in-range value passed up while typing: 15 for 150, and
+    // the old value for a 3 below the minimum.
+    const onSave = vi.fn<(next: Settings) => Promise<boolean>>(async () => true);
+    renderDialog({ onSave, settings: settings({ focusMinutes: 25, longBreakMinutes: 15 }) });
+    const focus = screen.getByLabelText("Focus") as HTMLInputElement;
+    const longBreak = screen.getByLabelText("Long break") as HTMLInputElement;
+
+    fireEvent.focus(longBreak);
+    fireEvent.change(longBreak, { target: { value: "" } });
+    type(longBreak, "3");
+    fireEvent.blur(longBreak);
+    fireEvent.focus(focus);
+    fireEvent.change(focus, { target: { value: "" } });
+    type(focus, "150");
+    // What a browser does for Enter in a form field: the key, then the submit.
+    fireEvent.keyDown(focus, { key: "Enter" });
+    fireEvent.submit(focus.closest("form")!);
+
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0][0]).toMatchObject({ focusMinutes: 120, longBreakMinutes: 5 });
+    expect(focus.value).toBe("120");
+  });
+});
+
+describe("app lists", () => {
+  it("keep a name that was typed but never added when the dialog is saved", async () => {
+    const onSave = vi.fn<(next: Settings) => Promise<boolean>>(async () => true);
+    renderDialog({ onSave });
+    fireEvent.click(screen.getByLabelText(/Capture desktop notifications/i));
+    const muted = screen.getByLabelText("Muted apps") as HTMLInputElement;
+
+    fireEvent.focus(muted);
+    fireEvent.change(muted, { target: { value: "  Slack " } });
+    // Reaching Save, by mouse or by Tab, takes focus out of the field first.
+    fireEvent.blur(muted);
+    fireEvent.click(screen.getByRole("button", { name: /Save settings/i }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0][0].notificationFilter.mutedApps).toEqual(["Slack"]);
+    expect(muted.value).toBe("");
+  });
+
+  it("add a name once, whether by Enter, by Add, or by leaving the field", () => {
+    renderDialog();
+    fireEvent.click(screen.getByLabelText(/Capture desktop notifications/i));
+    const muted = screen.getByLabelText("Muted apps") as HTMLInputElement;
+
+    fireEvent.change(muted, { target: { value: "Slack" } });
+    fireEvent.keyDown(muted, { key: "Enter" });
+    fireEvent.blur(muted);
+    fireEvent.change(muted, { target: { value: "slack" } });
+    fireEvent.blur(muted);
+
+    expect(screen.getAllByRole("button", { name: /Remove .* from muted apps/i })).toHaveLength(1);
+  });
 });
 
 describe("saving", () => {
