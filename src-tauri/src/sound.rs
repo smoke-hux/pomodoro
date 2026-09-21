@@ -1038,7 +1038,9 @@ mod tests {
             .count()
     }
 
-    /// The only test here that runs `sleep`, which is what lets it count them.
+    /// The only test in the crate that runs `sleep`, which is what lets it
+    /// count them. The tests run in parallel, in one process: another that
+    /// started a `sleep` of its own would be counted here as left behind.
     #[test]
     fn a_player_that_hangs_is_killed_and_reaped_and_nothing_else_is_tried() {
         let list = [stand_in("sleep", &["30"]), stand_in("true", &[])];
