@@ -103,13 +103,40 @@ Edits belong to you until you press Save: a state change arriving from the timer
 
 ## Install on Ubuntu
 
-Build or obtain the Debian package and install it:
+### With apt
 
-    sudo apt install ./src-tauri/target/release/bundle/deb/Pomodoro_0.1.0_amd64.deb
+Pomodoro is served from its own apt repository, so it installs and updates like anything else on the system. Add the repository once:
+
+    sudo install -d -m 0755 /etc/apt/keyrings
+    curl -fsSL https://smoke-hux.github.io/pomodoro/pomodoro.gpg \
+        | sudo tee /etc/apt/keyrings/pomodoro.gpg > /dev/null
+    sudo chmod a+r /etc/apt/keyrings/pomodoro.gpg
+    echo "deb [signed-by=/etc/apt/keyrings/pomodoro.gpg] https://smoke-hux.github.io/pomodoro stable main" \
+        | sudo tee /etc/apt/sources.list.d/pomodoro.list > /dev/null
+    sudo apt update
+
+Then:
+
+    sudo apt install pomodoro
+
+The key is made readable on purpose: apt verifies signatures as its own unprivileged user, and `sudo tee` would otherwise create the file under whatever umask you happen to have.
+
+From then on `sudo apt upgrade` brings new versions with the rest of the system. The key is restricted to this one repository by `signed-by`, so it can never sign anything else on the machine. To remove Pomodoro and the repository:
+
+    sudo apt remove pomodoro
+    sudo rm /etc/apt/sources.list.d/pomodoro.list /etc/apt/keyrings/pomodoro.gpg
+
+This is a third-party repository, not part of Ubuntu itself: `apt install pomodoro` works only after the two commands above. The name is free — Ubuntu ships the unrelated `gnome-shell-pomodoro`, and nothing else in the archive is called `pomodoro`.
+
+### From a single package
+
+A release also attaches the `.deb` on its own, for a machine that should not carry a new apt source. It does not update itself:
+
+    sudo apt install ./pomodoro_0.1.0_amd64.deb
 
 Or, without administrator rights, install it for your user alone. The package's files go under your home directory, and the launcher entry points at them:
 
-    dpkg-deb -x Pomodoro_0.1.0_amd64.deb /tmp/pomodoro-pkg
+    dpkg-deb -x pomodoro_0.1.0_amd64.deb /tmp/pomodoro-pkg
     install -Dm755 /tmp/pomodoro-pkg/usr/bin/pomodoro ~/.local/bin/pomodoro
     cp -r /tmp/pomodoro-pkg/usr/share/icons ~/.local/share/
     sed "s|^Exec=pomodoro$|Exec=$HOME/.local/bin/pomodoro|" \
@@ -122,7 +149,7 @@ To remove a per-user install, delete those files. Do not keep both kinds of inst
 
 Open Pomodoro from the application launcher. Closing the window hides it in the system tray so an active timer can continue; choose Quit from the tray menu to exit completely.
 
-The package was built on Ubuntu 24.04 x86_64 and is directly verified for Ubuntu 24.04 or newer. To support Ubuntu 22.04 with the widest binary compatibility, build the release on Ubuntu 22.04.
+Released packages are built on Ubuntu 22.04 x86_64, which is the oldest release they are meant for; they install on 22.04 and anything newer. A package you build yourself carries the compatibility of whatever release you build it on.
 
 ## Local data
 
@@ -181,3 +208,32 @@ Opening `npm run dev` in a browser shows the interface with sample data and no b
 Build a Debian package:
 
     npm run tauri build -- --bundles deb
+
+## Releasing
+
+A release is a tag. Pushing `v0.1.1` builds the package on Ubuntu 22.04, attaches it to a GitHub release, and rebuilds the apt repository from the packages of every release so far, so an older version stays installable while people upgrade. The workflow is `.github/workflows/release.yml`; it refuses to build if the tag and the two version fields disagree.
+
+    # set the same version in package.json, src-tauri/tauri.conf.json
+    # and src-tauri/Cargo.toml first
+    git tag v0.1.1
+    git push origin v0.1.1
+
+Re-running a tag's workflow is safe: it replaces the packages on the release that already exists rather than failing, so a publish that broke on its last step can be retried from the Actions tab.
+
+The repository itself is built by `scripts/build-apt-repo.sh`, which takes an output directory and any number of `.deb` files, arranges them into a pool, writes the indexes, signs them, and exports the public key beside them. It runs anywhere apt does, so a repository can be built and tested locally before any of it is published:
+
+    APT_SIGNING_KEY_ID=<key> scripts/build-apt-repo.sh /tmp/repo path/to/pomodoro_0.1.1_amd64.deb
+
+Point apt at the result with a `file://` source to confirm it resolves before pushing a tag.
+
+### Setting it up once
+
+The published repository is a static site on GitHub Pages, signed by a GPG key that belongs to the project and nothing else.
+
+1. Create the signing key, non-expiring and used for this repository alone: `gpg --quick-generate-key "Pomodoro packages <you@example.com>" ed25519 sign never`.
+2. Keep the secret key somewhere safe outside the repository. Losing it means every user has to install a new key by hand.
+3. Under Settings → Pages, set the source to GitHub Actions. This creates the `github-pages` environment.
+4. Under Settings → Environments → github-pages, add `v*` to the deployment branch and tag rules. GitHub creates that environment restricted to the default branch, and a release is a tag, so without this every tagged release builds and publishes a release and then fails on its very last step.
+5. In the same environment, add two environment secrets: `APT_SIGNING_KEY`, the armoured secret key from `gpg --armor --export-secret-keys <key>`, and `APT_SIGNING_PASSPHRASE`, its passphrase. Environment secrets, not repository secrets: the environment's rules then decide which runs may read them, so only a `v*` tag can sign. A repository secret can be read by a workflow on any branch that anyone with write access pushes.
+
+Run the workflow by hand from the Actions tab to publish the repository without cutting a release; it rebuilds from the releases that already exist.

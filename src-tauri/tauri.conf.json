@@ -31,6 +31,8 @@
     "active": true,
     "targets": ["deb", "appimage"],
     "category": "Productivity",
+    "homepage": "https://github.com/smoke-hux/pomodoro",
+    "publisher": "Pomodoro contributors",
     "shortDescription": "Focus timer and daily work ledger",
     "longDescription": "A local-first focus interval timer with tasks, interruption capture, desktop alerts, and daily progress.",
     "copyright": "Copyright 2026 Pomodoro contributors",
@@ -42,6 +44,8 @@
     ],
     "linux": {
       "deb": {
+        "section": "utils",
+        "priority": "optional",
         "depends": [],
         "recommends": ["gnome-session-canberra | pipewire-bin", "sound-theme-freedesktop"]
       }
