@@ -8,8 +8,8 @@
 //! handed to `canberra-gtk-play`, the one player that looks an id up in the
 //! user's theme and follows its `Inherits` chain down to `freedesktop`. Where
 //! that player is missing or refuses, the theme is searched by hand for the
-//! file and a plain file player is tried instead: `pw-play`, `gst-play-1.0`,
-//! `paplay`, in that order. Never `aplay`, which cannot decode the Ogg Vorbis
+//! file and a plain file player is tried instead: `pw-play`, `paplay`,
+//! `gst-play-1.0`, in that order. Never `aplay`, which cannot decode the Ogg Vorbis
 //! the themes are made of and would play it as noise.
 //!
 //! The spawned player is the only source of sound. The notifications Pomodoro
@@ -75,8 +75,9 @@ const PLAYER_DEADLINE: Duration = Duration::from_secs(15);
 /// waits on this, never the start of the sound.
 const PLAYER_POLL: Duration = Duration::from_millis(100);
 
-/// Where themes live when they are not the user's own.
-const SYSTEM_SOUNDS: &str = "/usr/share/sounds";
+/// Where themes live when they are not the user's own, if `XDG_DATA_DIRS`
+/// does not say: the default the base directory specification gives it.
+const DEFAULT_DATA_DIRS: &str = "/usr/local/share:/usr/share";
 /// Tried in this order within each directory. `.oga` is what the stock themes
 /// ship; the other two are what the sound theme specification also allows.
 const EXTENSIONS: [&str; 3] = ["oga", "ogg", "wav"];
@@ -165,9 +166,11 @@ fn theme_candidate(event_id: &str, description: &str) -> Candidate {
 
 /// The players that have to be handed a file, best first. `pw-play` is told
 /// the stream is a notification so the audio server routes and ducks it as
-/// one. `gst-play-1.0` reads its keyboard controls from stdin unless told not
-/// to. `paplay` is not part of a default install any more and costs nothing to
-/// try last.
+/// one. `paplay` is not part of a default install any more, but where it is,
+/// it says when it failed. `gst-play-1.0` does not: it exits with success on a
+/// file it cannot find or decode and on an audio server it cannot reach, so
+/// nothing after it would ever be tried, and it goes last. It reads its
+/// keyboard controls from stdin unless told not to.
 fn file_candidates(file: &Path) -> Vec<Candidate> {
     let file = file.as_os_str();
     vec![
@@ -175,6 +178,7 @@ fn file_candidates(file: &Path) -> Vec<Candidate> {
             "pw-play",
             [OsString::from("--media-role=Notification"), file.into()],
         ),
+        Candidate::new("paplay", [file]),
         Candidate::new(
             "gst-play-1.0",
             [
@@ -183,7 +187,6 @@ fn file_candidates(file: &Path) -> Vec<Candidate> {
                 file.into(),
             ],
         ),
-        Candidate::new("paplay", [file]),
     ]
 }
 
@@ -262,9 +265,9 @@ fn find_event_file(
     event_id: &str,
     themes: &[String],
     data_home: Option<&Path>,
+    system_sounds: &[PathBuf],
     exists: &impl Fn(&Path) -> bool,
 ) -> Option<PathBuf> {
-    let system = Path::new(SYSTEM_SOUNDS);
     let mut directories = Vec::new();
     for theme in themes {
         if let Some(data_home) = data_home {
@@ -272,7 +275,9 @@ fn find_event_file(
             directories.push(own.clone());
             directories.push(own.join("stereo"));
         }
-        directories.push(system.join(theme).join("stereo"));
+        for system in system_sounds {
+            directories.push(system.join(theme).join("stereo"));
+        }
     }
 
     directories
@@ -292,6 +297,25 @@ fn data_home_from(xdg_data_home: Option<OsString>, home: Option<OsString>) -> Op
     xdg_data_home
         .and_then(absolute)
         .or_else(|| Some(home.and_then(absolute)?.join(".local").join("share")))
+}
+
+/// The system's sound directories, most important first: `sounds` in each
+/// directory of `XDG_DATA_DIRS`, as libcanberra searches them. Not every system
+/// keeps its themes under `/usr/share` — NixOS, Guix and a theme installed to
+/// `/usr/local` do not. The specification says an unset or empty value means
+/// the default, and a relative entry is to be ignored.
+fn system_sounds_from(xdg_data_dirs: Option<OsString>) -> Vec<PathBuf> {
+    let dirs = xdg_data_dirs
+        .filter(|dirs| !dirs.is_empty())
+        .unwrap_or_else(|| DEFAULT_DATA_DIRS.into());
+    let mut sounds: Vec<PathBuf> = Vec::new();
+    for dir in env::split_paths(&dirs).filter(|dir| dir.is_absolute()) {
+        let dir = dir.join("sounds");
+        if !sounds.contains(&dir) {
+            sounds.push(dir);
+        }
+    }
+    sounds
 }
 
 /// How a walk over the candidates ended. The index says which candidate.
@@ -399,27 +423,30 @@ fn desktop_theme_name() -> Option<String> {
 /// Searches the themes on this machine for one event's file. The theme chain
 /// is worked out on the first call and kept for the second.
 fn file_finder() -> impl FnMut(&str) -> Option<PathBuf> {
-    let mut themes: Option<(Vec<String>, Option<PathBuf>)> = None;
+    let mut themes: Option<(Vec<String>, Option<PathBuf>, Vec<PathBuf>)> = None;
     move |event_id| {
-        let (themes, data_home) = themes.get_or_insert_with(|| {
+        let (themes, data_home, system_sounds) = themes.get_or_insert_with(|| {
             let data_home = data_home_from(env::var_os("XDG_DATA_HOME"), env::var_os("HOME"));
+            let system_sounds = system_sounds_from(env::var_os("XDG_DATA_DIRS"));
             let read_index = |theme: &str| {
                 data_home
                     .iter()
                     .map(|home| home.join("sounds"))
-                    .chain([PathBuf::from(SYSTEM_SOUNDS)])
+                    .chain(system_sounds.iter().cloned())
                     .find_map(|sounds| {
                         fs::read_to_string(sounds.join(theme).join("index.theme")).ok()
                     })
             };
-            (
-                theme_chain(desktop_theme_name().as_deref(), read_index),
-                data_home.clone(),
-            )
+            let themes = theme_chain(desktop_theme_name().as_deref(), read_index);
+            (themes, data_home, system_sounds)
         });
-        find_event_file(event_id, themes, data_home.as_deref(), &|path: &Path| {
-            path.is_file()
-        })
+        find_event_file(
+            event_id,
+            themes,
+            data_home.as_deref(),
+            system_sounds,
+            &|path: &Path| path.is_file(),
+        )
     }
 }
 
@@ -440,7 +467,7 @@ fn play_now(cue: Cue) -> Result<(), String> {
                 .to_string(),
         ),
         Outcome::NoneWorked => Err(
-            "No system sound player could play the sound. Pomodoro uses canberra-gtk-play, or pw-play, gst-play-1.0 or paplay with a sound theme installed."
+            "No system sound player could play the sound. Pomodoro uses canberra-gtk-play, or pw-play, paplay or gst-play-1.0 with a sound theme installed."
                 .to_string(),
         ),
     }
@@ -496,7 +523,20 @@ static SLOT: Mutex<Slot> = Mutex::new(Slot {
 /// ordinary one, which has already emptied it: a panic's unwinding, or a thread
 /// that could not be started and whose closure is thrown away. A slot left
 /// marked as playing would silence Pomodoro until it was restarted.
+///
+/// The ordinary route must [`release`](Occupied::release) it. The slot is free
+/// the moment that route unlocks it, and a new sound may be admitted before
+/// this thread is gone: emptying the slot again then would mark that sound as
+/// not playing, letting a third play over it, and throw away an alarm waiting
+/// behind it.
 struct Occupied(&'static Mutex<Slot>);
+
+impl Occupied {
+    /// Lets go without touching the slot, for the route that has emptied it.
+    fn release(self) {
+        std::mem::forget(self);
+    }
+}
 
 impl Drop for Occupied {
     fn drop(&mut self) {
@@ -562,6 +602,8 @@ fn request(
                     }
                     None => {
                         held.playing = None;
+                        drop(held);
+                        occupied.release();
                         break;
                     }
                 }
@@ -618,6 +660,11 @@ mod tests {
     };
 
     const NOWHERE: &str = "pomodoro-no-such-player";
+    const SYSTEM_SOUNDS: &str = "/usr/share/sounds";
+
+    fn system_sounds() -> Vec<PathBuf> {
+        vec![PathBuf::from(SYSTEM_SOUNDS)]
+    }
 
     fn untouched(_: &mut Command) {}
 
@@ -639,6 +686,7 @@ mod tests {
             cue.event_id(),
             &theme_chain(theme, |_| None),
             data_home,
+            &system_sounds(),
             &exists,
         )
     }
@@ -689,8 +737,8 @@ mod tests {
                     "--property=canberra.enable=1",
                 ],
                 vec!["pw-play", "--media-role=Notification", file],
-                vec!["gst-play-1.0", "--no-interactive", "-q", file],
                 vec!["paplay", file],
+                vec!["gst-play-1.0", "--no-interactive", "-q", file],
             ]
         );
     }
@@ -860,6 +908,38 @@ mod tests {
     }
 
     #[test]
+    fn the_system_sounds_are_in_each_of_xdg_data_dirs() {
+        let os = |text: &str| Some(OsString::from(text));
+        let paths = |list: &[&str]| list.iter().map(PathBuf::from).collect::<Vec<_>>();
+        assert_eq!(
+            system_sounds_from(os("/run/current-system/sw/share:/usr/share")),
+            paths(&["/run/current-system/sw/share/sounds", "/usr/share/sounds"])
+        );
+        // Unset or empty is the specification's default; relative entries and
+        // repeats are left out.
+        let default = paths(&["/usr/local/share/sounds", "/usr/share/sounds"]);
+        assert_eq!(system_sounds_from(None), default);
+        assert_eq!(system_sounds_from(os("")), default);
+        assert_eq!(
+            system_sounds_from(os("share:/usr/share::/usr/share")),
+            paths(&["/usr/share/sounds"])
+        );
+
+        // A theme that lives only outside /usr/share is found.
+        let nix = "/run/current-system/sw/share/sounds/freedesktop/stereo/complete.oga";
+        assert_eq!(
+            find_event_file(
+                "complete",
+                &theme_chain(None, |_| None),
+                None,
+                &system_sounds_from(os("/run/current-system/sw/share:/usr/share")),
+                &only(&[nix])
+            ),
+            Some(PathBuf::from(nix))
+        );
+    }
+
+    #[test]
     fn a_player_that_is_not_installed_passes_the_turn() {
         let list = [stand_in(NOWHERE, &[]), stand_in("true", &[])];
         assert_eq!(
@@ -958,7 +1038,9 @@ mod tests {
             .count()
     }
 
-    /// The only test here that runs `sleep`, which is what lets it count them.
+    /// The only test in the crate that runs `sleep`, which is what lets it
+    /// count them. The tests run in parallel, in one process: another that
+    /// started a `sleep` of its own would be counted here as left behind.
     #[test]
     fn a_player_that_hangs_is_killed_and_reaped_and_nothing_else_is_tried() {
         let list = [stand_in("sleep", &["30"]), stand_in("true", &[])];
@@ -1009,6 +1091,7 @@ mod tests {
                 "complete",
                 &theme_chain(Some("Mine"), index),
                 None,
+                &system_sounds(),
                 &only(&[deep])
             ),
             Some(PathBuf::from(deep))
@@ -1231,6 +1314,70 @@ mod tests {
     }
 
     #[test]
+    fn a_released_slot_is_not_emptied_again_behind_the_next_sound() {
+        static SLOT: Mutex<Slot> = Mutex::new(Slot {
+            playing: None,
+            waiting: None,
+        });
+        let occupied = Occupied(&SLOT);
+        // The ordinary route has emptied the slot and unlocked it, and a new
+        // sound, with an alarm waiting behind it, has already been admitted.
+        let (reply, outcome) = mpsc::channel();
+        {
+            let mut slot = SLOT.lock().unwrap();
+            slot.playing = Some(Cue::TaskDone);
+            slot.waiting = Some(Request {
+                cue: Cue::IntervalFinished,
+                reply: Some(reply),
+            });
+        }
+        occupied.release();
+
+        let slot = SLOT.lock().unwrap();
+        assert_eq!(slot.playing, Some(Cue::TaskDone));
+        assert_eq!(
+            slot.waiting.as_ref().map(|next| next.cue),
+            Some(Cue::IntervalFinished)
+        );
+        assert!(outcome.try_recv().is_err(), "the waiting alarm was dropped");
+    }
+
+    #[test]
+    fn sounds_asked_for_from_many_threads_never_play_over_one_another() {
+        static SLOT: Mutex<Slot> = Mutex::new(Slot {
+            playing: None,
+            waiting: None,
+        });
+        static AT_ONCE: AtomicU32 = AtomicU32::new(0);
+        static MOST: AtomicU32 = AtomicU32::new(0);
+        fn counted(_: Cue) -> Result<(), String> {
+            let now = AT_ONCE.fetch_add(1, Ordering::SeqCst) + 1;
+            MOST.fetch_max(now, Ordering::SeqCst);
+            AT_ONCE.fetch_sub(1, Ordering::SeqCst);
+            Ok(())
+        }
+        let askers: Vec<_> = (0..4)
+            .map(|_| {
+                thread::spawn(|| {
+                    for _ in 0..20_000 {
+                        request(&SLOT, Cue::TaskDone, None, counted);
+                    }
+                })
+            })
+            .collect();
+        for asker in askers {
+            asker.join().unwrap();
+        }
+        for _ in 0..100 {
+            if SLOT.lock().unwrap().playing.is_none() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(MOST.load(Ordering::SeqCst), 1, "two sounds played at once");
+    }
+
+    #[test]
     fn playing_does_nothing_under_test() {
         play(Cue::IntervalFinished);
         play(Cue::TaskDone);
@@ -1355,8 +1502,8 @@ mod tests {
         let stand_ins = StandIns::new("fallback");
         stand_ins.add("canberra-gtk-play", 1);
         // No pw-play here: the turn passes over it to the next one.
-        stand_ins.add("gst-play-1.0", 0);
         stand_ins.add("paplay", 0);
+        stand_ins.add("gst-play-1.0", 0);
         let file = Path::new("/nonexistent/complete.oga");
 
         let outcome = stand_ins.walk(&candidates(Cue::TaskDone, Some(file)));
@@ -1364,9 +1511,27 @@ mod tests {
         assert_eq!(outcome, Walk::Played(2));
         assert!(stand_ins.args("canberra-gtk-play").is_some());
         assert_eq!(
-            stand_ins.args("gst-play-1.0").unwrap(),
-            ["--no-interactive", "-q", "/nonexistent/complete.oga"]
+            stand_ins.args("paplay").unwrap(),
+            ["/nonexistent/complete.oga"]
         );
-        assert_eq!(stand_ins.args("paplay"), None);
+        assert_eq!(stand_ins.args("gst-play-1.0"), None);
+    }
+
+    #[test]
+    fn a_file_player_that_fails_hands_over_to_the_one_that_cannot_say_so() {
+        // gst-play-1.0 exits with success whether or not it played, so a
+        // player that does report failure has to have had its turn first.
+        let stand_ins = StandIns::new("unreliable");
+        stand_ins.add("canberra-gtk-play", 1);
+        stand_ins.add("pw-play", 1);
+        stand_ins.add("paplay", 1);
+        stand_ins.add("gst-play-1.0", 0);
+        let file = Path::new("/nonexistent/complete.oga");
+
+        let outcome = stand_ins.walk(&candidates(Cue::TaskDone, Some(file)));
+
+        assert_eq!(outcome, Walk::Played(3));
+        assert!(stand_ins.args("pw-play").is_some());
+        assert!(stand_ins.args("paplay").is_some());
     }
 }

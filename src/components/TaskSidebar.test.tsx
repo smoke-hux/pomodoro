@@ -26,7 +26,7 @@ function task(patch: Partial<FocusTask> = {}): FocusTask {
 function renderSidebar(tasks: FocusTask[], accepted = true) {
   const onUpdateTask = vi.fn().mockResolvedValue(accepted);
   const onDeleteTask = vi.fn();
-  render(
+  const sidebar = (addRequest: number) => (
     <TaskSidebar
       tasks={tasks}
       interruptions={[]}
@@ -34,7 +34,7 @@ function renderSidebar(tasks: FocusTask[], accepted = true) {
       captureEnabled={false}
       captureStatus={{ state: "off", detail: "" }}
       activeTaskId={null}
-      addRequest={0}
+      addRequest={addRequest}
       selectionLocked={false}
       dayKey={getLocalDateKey(NOW)}
       onSelectTask={vi.fn()}
@@ -50,10 +50,31 @@ function renderSidebar(tasks: FocusTask[], accepted = true) {
       onConvertNotification={vi.fn()}
       onDeleteNotification={vi.fn()}
       onOpenSettings={vi.fn()}
-    />,
+    />
   );
-  return { onUpdateTask, onDeleteTask };
+  const { rerender } = render(sidebar(0));
+  const requestAdd = (count: number) => rerender(sidebar(count));
+  return { onUpdateTask, onDeleteTask, requestAdd };
 }
+
+describe("the add shortcut", () => {
+  it("takes focus back to the form when the form is already open", () => {
+    const { requestAdd } = renderSidebar([task()]);
+    requestAdd(1);
+    const title = screen.getByLabelText("Task") as HTMLInputElement;
+    expect(document.activeElement).toBe(title);
+
+    // Focus goes elsewhere, and Ctrl+N is pressed again.
+    fireEvent.change(title, { target: { value: "Draft" } });
+    title.blur();
+    expect(document.activeElement).not.toBe(title);
+    requestAdd(2);
+
+    expect(document.activeElement).toBe(title);
+    expect(title.value).toBe("Draft");
+    expect(title.selectionStart).toBe(title.selectionEnd);
+  });
+});
 
 describe("editing a task", () => {
   it("opens the task's own title and estimate, and saves what was changed", async () => {

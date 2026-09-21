@@ -291,21 +291,33 @@ fn notify_boundary(app: &AppHandle, completed: Phase, snapshot: &AppData) {
         return;
     }
 
-    let (title, body) = match completed {
+    let (title, body) = boundary_banner(completed, snapshot);
+    let _ = app.notification().builder().title(title).body(body).show();
+}
+
+/// The title and text of the banner for the end of `completed`. The count of
+/// rounds is the one actually finished: it used to say four whatever the
+/// setting was.
+fn boundary_banner(completed: Phase, snapshot: &AppData) -> (&'static str, String) {
+    match completed {
         Phase::Focus => match snapshot.timer.phase {
-            Phase::LongBreak => (
-                "Focus cycle complete",
-                "You finished four rounds. Take a restorative long break.",
-            ),
-            _ => ("Focus complete", "Step away for a short break."),
+            Phase::LongBreak => {
+                let rounds = match snapshot.timer.completed_in_cycle {
+                    1 => "a round".to_string(),
+                    count => format!("{count} rounds"),
+                };
+                (
+                    "Focus cycle complete",
+                    format!("You finished {rounds}. Take a restorative long break."),
+                )
+            }
+            _ => ("Focus complete", "Step away for a short break.".to_string()),
         },
         Phase::ShortBreak | Phase::LongBreak => (
             "Break complete",
-            "Choose one task when you are ready to focus again.",
+            "Choose one task when you are ready to focus again.".to_string(),
         ),
-    };
-
-    let _ = app.notification().builder().title(title).body(body).show();
+    }
 }
 
 /// The labels the tray's start/pause item can carry, indexed by
@@ -1071,7 +1083,8 @@ impl RuntimeState {
     ///   the first tick recorded a full completed focus, credited the task,
     ///   announced "Focus complete" and started a break. Quitting is walking
     ///   away, and what is kept is the time that was left. If the interval is
-    ///   in fact already due, `pause` completes it instead, which is right.
+    ///   in fact already due, it is completed instead, but the next one is not
+    ///   started: see [`AppData::pause_to_quit`].
     /// - Banners go back on if they were turned off for a focus interval.
     /// - Everything is written, captured notifications included, rather than
     ///   waiting on the debounce.
@@ -1082,7 +1095,7 @@ impl RuntimeState {
         self.listener.stop();
         self.quiet_desire.store(0, Ordering::Release);
         if let Ok(mut data) = self.data.lock() {
-            data.pause(now_ms);
+            data.pause_to_quit(now_ms);
             if let Some(previous) = data.banner_restore.take() {
                 if let Err(error) = quiet::write_show_banners(previous) {
                     eprintln!("could not restore notification banners: {error}");
@@ -1269,6 +1282,34 @@ pub fn run() {
                 shut_down(app);
             }
         });
+}
+
+#[cfg(test)]
+mod banner {
+    use super::*;
+
+    fn at_long_break(rounds: u32) -> AppData {
+        let mut data = AppData::default();
+        data.timer.phase = Phase::LongBreak;
+        data.timer.completed_in_cycle = rounds;
+        data
+    }
+
+    #[test]
+    fn the_long_break_banner_counts_the_rounds_actually_finished() {
+        assert_eq!(
+            boundary_banner(Phase::Focus, &at_long_break(2)).1,
+            "You finished 2 rounds. Take a restorative long break."
+        );
+        assert_eq!(
+            boundary_banner(Phase::Focus, &at_long_break(1)).1,
+            "You finished a round. Take a restorative long break."
+        );
+        assert_eq!(
+            boundary_banner(Phase::Focus, &AppData::default()),
+            ("Focus complete", "Step away for a short break.".to_string())
+        );
+    }
 }
 
 #[cfg(test)]

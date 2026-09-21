@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { useModalFocus } from "../lib/useModalFocus";
 import { AlertTriangle, X } from "lucide-react";
 import type {
@@ -87,6 +88,10 @@ function AppListEditor({
           placeholder="App name"
           aria-describedby={`${id}-hint`}
           onChange={(event) => setDraft(event.target.value)}
+          // A name typed and never added was dropped by Save without a word,
+          // leaving the app believed muted. Leaving the field adds it, and
+          // every way of reaching Save leaves the field first.
+          onBlur={add}
           onKeyDown={(event) => {
             // The dialog is one big form. Enter here means "add", not "save".
             if (event.key === "Enter") {
@@ -182,6 +187,13 @@ function NumberSetting({
           max={max}
           onFocus={() => setEditing(true)}
           onBlur={settle}
+          onKeyDown={(event) => {
+            // Enter saves the form without leaving the field, so it settles
+            // here first; otherwise the save took whatever in-range value was
+            // last passed up — 15 for a typed 150. Flushed, so the save that
+            // follows sees it.
+            if (event.key === "Enter") flushSync(settle);
+          }}
           onChange={(event) => {
             setEditing(true);
             setText(event.target.value);

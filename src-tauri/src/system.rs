@@ -230,7 +230,9 @@ mod tests {
 
     #[test]
     fn a_child_that_will_not_finish_is_killed_and_reaped() {
-        let mut child = command("sleep").arg("30").spawn().unwrap();
+        // Not `sleep`: the sound tests count this process's `sleep` children
+        // to prove their own was reaped, and run alongside this one.
+        let mut child = command("tail").args(["-f", "/dev/null"]).spawn().unwrap();
         let began = Instant::now();
         let status = wait_until(
             &mut child,

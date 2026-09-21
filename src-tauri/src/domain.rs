@@ -558,6 +558,16 @@ impl AppData {
         true
     }
 
+    /// Pauses for a quit. A phase that is already due is completed, as [`Self::pause`]
+    /// would, except that the next phase waits, idle, instead of starting
+    /// itself: nobody is there to take it. A break started here was saved as
+    /// running, and the next launch recorded it as taken.
+    pub fn pause_to_quit(&mut self, now_ms: i64) {
+        if self.complete_due(now_ms, false).is_none() {
+            self.pause(now_ms);
+        }
+    }
+
     /// Resets the current phase to its configured duration. An in-progress
     /// session is retained as abandoned for honest local statistics.
     pub fn reset(&mut self, now_ms: i64) {
@@ -1334,6 +1344,41 @@ mod tests {
         assert_eq!(data.tick(97_999), None);
         assert_eq!(data.timer.remaining_seconds, 1);
         assert_eq!(data.tick(98_000), Some(Phase::Focus));
+    }
+
+    #[test]
+    fn quitting_as_a_focus_runs_out_completes_it_but_starts_no_break() {
+        let mut data = AppData::default();
+        data.update_settings(one_minute_settings());
+        assert!(data.settings.auto_start_breaks);
+        data.start_or_resume(0);
+
+        // Quit a moment after the deadline, before the timer thread noticed.
+        data.pause_to_quit(60_010);
+        assert_eq!(data.timer.phase, Phase::ShortBreak);
+        assert_eq!(data.timer.status, TimerStatus::Idle);
+        assert_eq!(data.timer.completed_in_cycle, 1);
+        assert_eq!(data.sessions.len(), 1);
+        assert_eq!(data.sessions[0].phase, Phase::Focus);
+        assert_eq!(data.sessions[0].outcome, SessionOutcome::Completed);
+
+        // Launched ten minutes later, there is no break to record as taken.
+        assert!(!data.recover_at_launch(660_010));
+        assert_eq!(data.sessions.len(), 1);
+        assert_eq!(data.timer.status, TimerStatus::Idle);
+    }
+
+    #[test]
+    fn quitting_before_the_deadline_pauses_what_is_left() {
+        let mut data = AppData::default();
+        data.update_settings(one_minute_settings());
+        data.start_or_resume(0);
+
+        data.pause_to_quit(20_000);
+        assert_eq!(data.timer.phase, Phase::Focus);
+        assert_eq!(data.timer.status, TimerStatus::Paused);
+        assert_eq!(data.timer.remaining_seconds, 40);
+        assert!(data.sessions.is_empty());
     }
 
     #[test]
