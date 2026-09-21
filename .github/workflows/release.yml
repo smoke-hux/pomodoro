@@ -8,13 +8,15 @@ name: Release
 # workflow can also be run by hand to republish the current releases
 # without cutting a new one.
 #
-# Needs two repository secrets: APT_SIGNING_KEY, an armoured secret GPG key,
-# and APT_SIGNING_PASSPHRASE, its passphrase (empty if it has none). Pages
-# must be set to deploy from GitHub Actions, and the github-pages
-# environment must allow tags to deploy: it is created restricted to the
-# default branch, which would fail every tagged release on its last step.
-# Settings -> Environments -> github-pages -> Deployment branches and tags
-# needs a rule for `v*`.
+# Needs two secrets on the github-pages environment, not the repository:
+# APT_SIGNING_KEY, an armoured secret GPG key, and APT_SIGNING_PASSPHRASE,
+# its passphrase (empty if it has none). On the environment, only a run its
+# rules let deploy can read them; a repository secret is readable from a
+# workflow on any branch. Pages must be set to deploy from GitHub Actions,
+# and the github-pages environment must allow tags to deploy: it is created
+# restricted to the default branch, which would fail every tagged release on
+# its last step. Settings -> Environments -> github-pages -> Deployment
+# branches and tags needs a rule for `v*`.
 
 on:
   push:

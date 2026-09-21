@@ -232,8 +232,8 @@ The published repository is a static site on GitHub Pages, signed by a GPG key t
 
 1. Create the signing key, non-expiring and used for this repository alone: `gpg --quick-generate-key "Pomodoro packages <you@example.com>" ed25519 sign never`.
 2. Keep the secret key somewhere safe outside the repository. Losing it means every user has to install a new key by hand.
-3. Add two repository secrets: `APT_SIGNING_KEY`, the armoured secret key from `gpg --armor --export-secret-keys <key>`, and `APT_SIGNING_PASSPHRASE`, its passphrase.
-4. Under Settings → Pages, set the source to GitHub Actions.
-5. Under Settings → Environments → github-pages, add `v*` to the deployment branch and tag rules. GitHub creates that environment restricted to the default branch, and a release is a tag, so without this every tagged release builds and publishes a release and then fails on its very last step.
+3. Under Settings → Pages, set the source to GitHub Actions. This creates the `github-pages` environment.
+4. Under Settings → Environments → github-pages, add `v*` to the deployment branch and tag rules. GitHub creates that environment restricted to the default branch, and a release is a tag, so without this every tagged release builds and publishes a release and then fails on its very last step.
+5. In the same environment, add two environment secrets: `APT_SIGNING_KEY`, the armoured secret key from `gpg --armor --export-secret-keys <key>`, and `APT_SIGNING_PASSPHRASE`, its passphrase. Environment secrets, not repository secrets: the environment's rules then decide which runs may read them, so only a `v*` tag can sign. A repository secret can be read by a workflow on any branch that anyone with write access pushes.
 
 Run the workflow by hand from the Actions tab to publish the repository without cutting a release; it rebuilds from the releases that already exist.
