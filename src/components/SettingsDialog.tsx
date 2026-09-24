@@ -9,6 +9,7 @@ import type {
   TimerFace as TimerFaceId,
 } from "../types";
 import { TimerFace } from "./TimerFace";
+import { DataSettings } from "./DataSettings";
 
 /**
  * Previewed at 15:00 of a 25:00 interval so every face shows a partial state —
@@ -67,9 +68,7 @@ function AppListEditor({
 
   const add = () => {
     if (!cleaned) return;
-    const known = items.some(
-      (item) => item.toLowerCase() === cleaned.toLowerCase(),
-    );
+    const known = items.some((item) => item.toLowerCase() === cleaned.toLowerCase());
     if (!known) onChange([...items, cleaned]);
     setDraft("");
   };
@@ -121,9 +120,7 @@ function AppListEditor({
                 type="button"
                 disabled={disabled}
                 aria-label={`Remove ${item} from ${label.toLowerCase()}`}
-                onClick={() =>
-                  onChange(items.filter((_, position) => position !== index))
-                }
+                onClick={() => onChange(items.filter((_, position) => position !== index))}
               >
                 <X aria-hidden="true" size={13} />
               </button>
@@ -198,7 +195,12 @@ function NumberSetting({
             setEditing(true);
             setText(event.target.value);
             const typed = Number(event.target.value);
-            if (event.target.value.trim() !== "" && Number.isInteger(typed) && typed >= min && typed <= max) {
+            if (
+              event.target.value.trim() !== "" &&
+              Number.isInteger(typed) &&
+              typed >= min &&
+              typed <= max
+            ) {
               onChange(typed);
             }
           }}
@@ -256,6 +258,7 @@ function SettingsDialogComponent({
   const [confirmClear, setConfirmClear] = useState(false);
   const [confirmClearNotifications, setConfirmClearNotifications] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [dataBusy, setDataBusy] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const dialogRef = useRef<HTMLElement>(null);
   useModalFocus(open, dialogRef);
@@ -286,25 +289,35 @@ function SettingsDialogComponent({
   const captureNotice = describeCapture(captureStatus, settings.notificationFilter.enabled);
 
   return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
+    <div
+      className="dialog-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
       <section
         className="dialog settings-dialog"
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-title"
-        onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="dialog-header">
           <h2 id="settings-title">Settings</h2>
-          <button className="icon-button" type="button" onClick={onClose} aria-label="Close settings">
+          <button
+            className="icon-button"
+            type="button"
+            onClick={onClose}
+            aria-label="Close settings"
+          >
             <X aria-hidden="true" size={19} />
           </button>
         </header>
         <form
           onSubmit={(event) => {
             event.preventDefault();
-            if (saving) return;
+            if (saving || dataBusy) return;
             setSaving(true);
             // Only a save that happened closes the dialog. Closing on a refused
             // one discarded every edit along with the error that explained why.
@@ -348,9 +361,7 @@ function SettingsDialogComponent({
                 min={2}
                 max={8}
                 suffix="rounds"
-                onChange={(roundsBeforeLongBreak) =>
-                  setDraft({ ...draft, roundsBeforeLongBreak })
-                }
+                onChange={(roundsBeforeLongBreak) => setDraft({ ...draft, roundsBeforeLongBreak })}
               />
             </fieldset>
 
@@ -377,9 +388,7 @@ function SettingsDialogComponent({
                 <input
                   type="checkbox"
                   checked={draft.autoStartFocus}
-                  onChange={(event) =>
-                    setDraft({ ...draft, autoStartFocus: event.target.checked })
-                  }
+                  onChange={(event) => setDraft({ ...draft, autoStartFocus: event.target.checked })}
                 />
               </label>
             </fieldset>
@@ -389,22 +398,22 @@ function SettingsDialogComponent({
               <label className="toggle-row">
                 <span>
                   <strong>Desktop notifications</strong>
-                  <small>Show a desktop notification when an interval ends or a task is completed.</small>
+                  <small>
+                    Show a desktop notification when an interval ends or a task is completed.
+                  </small>
                 </span>
                 <input
                   type="checkbox"
                   checked={draft.notifications}
-                  onChange={(event) =>
-                    setDraft({ ...draft, notifications: event.target.checked })
-                  }
+                  onChange={(event) => setDraft({ ...draft, notifications: event.target.checked })}
                 />
               </label>
               <label className="toggle-row">
                 <span>
                   <strong>Sound</strong>
                   <small>
-                    Play a sound from the desktop’s sound theme when an interval ends or a
-                    task is completed — also while this window is hidden in the tray.
+                    Play a sound from the desktop’s sound theme when an interval ends or a task is
+                    completed — also while this window is hidden in the tray.
                   </small>
                 </span>
                 <input
@@ -432,13 +441,12 @@ function SettingsDialogComponent({
             <fieldset>
               <legend>Notification capture</legend>
               <p className="fieldset-note">
-                Pomodoro can watch the desktop notification service and file a
-                copy of what other apps send, so it can be read after the
-                interval instead of during it. Watching does not hide anything:
-                banners still appear and sounds still play unless you also
-                silence them below. Captured text stays in Pomodoro’s local data
-                on this machine. It is never sent anywhere, and the app makes no
-                network requests. Capture stays off until you turn it on here.
+                Pomodoro can watch the desktop notification service and file a copy of what other
+                apps send, so it can be read after the interval instead of during it. Watching does
+                not hide anything: banners still appear and sounds still play unless you also
+                silence them below. Captured text stays in Pomodoro’s local data on this machine. It
+                is never sent anywhere, and the app makes no network requests. Capture stays off
+                until you turn it on here.
               </p>
               <label className="toggle-row">
                 <span>
@@ -467,8 +475,7 @@ function SettingsDialogComponent({
                   disabled={captureOff}
                   onChange={(event) =>
                     setFilter({
-                      minUrgency: Number(event.target.value) as
-                        NotificationFilter["minUrgency"],
+                      minUrgency: Number(event.target.value) as NotificationFilter["minUrgency"],
                     })
                   }
                 >
@@ -509,10 +516,10 @@ function SettingsDialogComponent({
                 <span>
                   <strong>Silence banners during focus</strong>
                   <small>
-                    Switches the desktop’s own Do Not Disturb on for the length of
-                    each focus interval and switches it back afterwards. This
-                    changes a GNOME setting outside Pomodoro, so it is off by
-                    default. Banners you had already turned off are left alone.
+                    Switches the desktop’s own Do Not Disturb on for the length of each focus
+                    interval and switches it back afterwards. This changes a GNOME setting outside
+                    Pomodoro, so it is off by default. Banners you had already turned off are left
+                    alone.
                   </small>
                 </span>
                 <input
@@ -553,14 +560,9 @@ function SettingsDialogComponent({
                   Timer face
                 </span>
                 <p className="setting-hint">
-                  How the remaining time is drawn. Each one trades precision for calm
-                  differently.
+                  How the remaining time is drawn. Each one trades precision for calm differently.
                 </p>
-                <div
-                  className="face-picker"
-                  role="group"
-                  aria-labelledby="timer-face-label"
-                >
+                <div className="face-picker" role="group" aria-labelledby="timer-face-label">
                   {TIMER_FACES.map((option) => (
                     <button
                       key={option.id}
@@ -586,24 +588,41 @@ function SettingsDialogComponent({
               </div>
             </fieldset>
 
+            <DataSettings onImported={onClose} onBusyChange={setDataBusy} />
+
             <fieldset>
               <legend>Data</legend>
               <div className="data-row">
                 <span>
                   <strong>Session history</strong>
-                  <small>Tasks stay in place; completed session records are removed.</small>
+                  <small>
+                    Tasks stay in place. A recovery copy is saved before session records are
+                    cleared.
+                  </small>
                 </span>
                 {confirmClear ? (
                   <span className="clear-confirm">
-                    <button className="text-button" type="button" onClick={() => setConfirmClear(false)}>
+                    <button
+                      className="text-button"
+                      type="button"
+                      onClick={() => setConfirmClear(false)}
+                    >
                       Cancel
                     </button>
-                    <button className="danger-button" type="button" onClick={() => void onClearHistory()}>
+                    <button
+                      className="danger-button"
+                      type="button"
+                      onClick={() => void onClearHistory()}
+                    >
                       Confirm clear
                     </button>
                   </span>
                 ) : (
-                  <button className="secondary-control" type="button" onClick={() => setConfirmClear(true)}>
+                  <button
+                    className="secondary-control"
+                    type="button"
+                    onClick={() => setConfirmClear(true)}
+                  >
                     Clear history
                   </button>
                 )}
@@ -614,7 +633,7 @@ function SettingsDialogComponent({
                   <small>
                     {notificationCount === 0
                       ? "Nothing is filed right now."
-                      : `Removes all ${notificationCount} captured copies, including their message text. Tasks already made from them stay.`}
+                      : `Removes all ${notificationCount} copies from the active data file. Tasks already made from them stay. Older backups and exports may still contain the message text.`}
                   </small>
                 </span>
                 {confirmClearNotifications ? (
@@ -650,17 +669,46 @@ function SettingsDialogComponent({
             <fieldset>
               <legend>Keyboard</legend>
               <dl className="shortcut-list">
-                <div><dt><kbd>Space</kbd></dt><dd>Start or pause</dd></div>
-                <div><dt><kbd>Ctrl I</kbd></dt><dd>Capture interruption</dd></div>
-                <div><dt><kbd>Ctrl N</kbd></dt><dd>Add task</dd></div>
-                <div><dt><kbd>Ctrl 1–3</kbd></dt><dd>Choose timer mode</dd></div>
-                <div><dt><kbd>Ctrl ,</kbd></dt><dd>Open settings</dd></div>
+                <div>
+                  <dt>
+                    <kbd>Space</kbd>
+                  </dt>
+                  <dd>Start or pause</dd>
+                </div>
+                <div>
+                  <dt>
+                    <kbd>Ctrl I</kbd>
+                  </dt>
+                  <dd>Capture interruption</dd>
+                </div>
+                <div>
+                  <dt>
+                    <kbd>Ctrl N</kbd>
+                  </dt>
+                  <dd>Add task</dd>
+                </div>
+                <div>
+                  <dt>
+                    <kbd>Ctrl 1–3</kbd>
+                  </dt>
+                  <dd>Choose timer mode</dd>
+                </div>
+                <div>
+                  <dt>
+                    <kbd>Ctrl ,</kbd>
+                  </dt>
+                  <dd>Open settings</dd>
+                </div>
               </dl>
             </fieldset>
           </div>
           <div className="dialog-actions settings-actions">
-            <button className="text-button" type="button" onClick={onClose}>Cancel</button>
-            <button className="small-primary" type="submit">Save settings</button>
+            <button className="text-button" type="button" onClick={onClose}>
+              Cancel
+            </button>
+            <button className="small-primary" type="submit" disabled={dataBusy}>
+              Save settings
+            </button>
           </div>
         </form>
       </section>

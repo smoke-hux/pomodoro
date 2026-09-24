@@ -1,0 +1,312 @@
+@media (max-width: 859px) {
+  .mobile-only {
+    display: inline-grid;
+  }
+
+  .app-toolbar {
+    padding-left: 4px;
+  }
+
+  .workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Placed inside the workspace, not against the window: the workspace starts
+     below whatever is above it, and that is not always just the toolbar. Pinned
+     at the toolbar's height, the drawer and its scrim covered the notice that
+     is shown when the saved data could not be read, Dismiss button included. */
+  .sidebar-wrap {
+    position: absolute;
+    z-index: 70;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    display: none;
+    width: min(var(--sidebar-width), calc(100vw - 48px));
+    border-right-color: var(--control-border);
+    box-shadow: var(--shadow-menu);
+  }
+
+  .sidebar-wrap.open {
+    display: block;
+  }
+
+  .sidebar-scrim {
+    position: absolute;
+    z-index: 60;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: block;
+    width: 100%;
+    padding: 0;
+    background: var(--backdrop);
+    border: 0;
+    border-radius: 0;
+    cursor: default;
+  }
+}
+
+@media (max-width: 639px) {
+  .toolbar-summary {
+    display: none;
+  }
+
+  .app-name {
+    margin-right: auto;
+  }
+
+  .timer-panel {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 48px auto minmax(0, 1fr);
+    padding: 0 16px;
+  }
+
+  .phase-tabs {
+    grid-column: 1;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .cycle-count {
+    grid-column: 1;
+    min-height: 34px;
+    padding: 6px 0 0;
+    border-bottom: 0;
+  }
+
+  .timer-stage {
+    grid-column: 1;
+    padding-top: 10px;
+  }
+
+  .face-digits {
+    font-size: clamp(58px, 19vw, 92px);
+  }
+
+  .capacity-line {
+    grid-template-columns: auto minmax(70px, 1fr);
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .capacity-line > span:last-child {
+    display: none;
+  }
+
+  .ledger summary,
+  .session-row {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .session-row {
+    grid-template-columns: 64px minmax(90px, 1fr) 42px;
+    gap: 8px;
+  }
+
+  .session-outcome {
+    display: none;
+  }
+}
+
+@media (max-width: 479px) {
+  .brand-mark {
+    display: none;
+  }
+
+  .phase-tabs button {
+    font-size: 12px;
+  }
+
+  .round-marks {
+    display: none;
+  }
+
+  .timer-controls {
+    width: 100%;
+  }
+
+  .primary-control {
+    flex: 1 1 100%;
+  }
+
+  .secondary-control {
+    flex: 1 1 calc(50% - 4px);
+  }
+
+  .shortcut-hint {
+    display: none;
+  }
+
+  .dialog-backdrop {
+    padding: 10px;
+  }
+
+  .dialog {
+    max-height: calc(100dvh - 20px);
+  }
+
+  .icon-button,
+  .row-menu > summary,
+  .estimate-stepper button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .primary-control,
+  .secondary-control,
+  .small-primary,
+  .text-button,
+  .danger-button,
+  .category-choice label {
+    min-height: 44px;
+  }
+
+  .capture-dialog {
+    padding: 18px 16px 16px;
+  }
+
+  .settings-scroll {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .setting-row,
+  .data-row {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 7px;
+    padding: 8px 0;
+  }
+
+  .number-setting,
+  .setting-row select,
+  .data-row > .secondary-control,
+  .clear-confirm {
+    align-self: stretch;
+  }
+
+  .setting-row select {
+    width: 100%;
+  }
+
+  .number-setting input {
+    flex: 1 1 auto;
+    width: auto;
+  }
+
+  .data-row > .secondary-control {
+    width: 100%;
+  }
+
+  .shortcut-list > div {
+    grid-template-columns: 92px minmax(0, 1fr);
+  }
+}
+
+@media (max-height: 619px) {
+  .focus-column {
+    grid-template-rows: minmax(0, 1fr) 48px;
+  }
+
+  .ledger details > :not(summary) {
+    display: none !important;
+  }
+
+  .ledger summary {
+    border-bottom: 0;
+  }
+
+  .ledger-chevron {
+    display: none;
+  }
+
+  .timer-stage {
+    justify-content: flex-start;
+    padding-top: 14px;
+    padding-bottom: 10px;
+  }
+
+  .face-digits {
+    font-size: clamp(58px, 16vh, 88px);
+  }
+
+  .progress-track {
+    margin-top: 14px;
+  }
+
+  .session-task {
+    min-height: 42px;
+    margin-top: 10px;
+  }
+
+  .timer-controls {
+    margin-top: 10px;
+  }
+
+  .shortcut-hint {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+@media (forced-colors: active) {
+  :root {
+    --canvas: Canvas;
+    --surface: Canvas;
+    --surface-raised: Canvas;
+    --surface-selected: Highlight;
+    --surface-hover: Canvas;
+    --text: CanvasText;
+    --text-muted: CanvasText;
+    --divider: ButtonBorder;
+    --control-border: ButtonBorder;
+    --focus: Highlight;
+    --focus-hover: Highlight;
+    --on-focus: HighlightText;
+    --break: Highlight;
+    --break-hover: Highlight;
+    --on-break: HighlightText;
+    --danger: LinkText;
+    --danger-hover: LinkText;
+    --on-danger: Canvas;
+    --focus-ring: Highlight;
+    --shadow-menu: none;
+  }
+
+  .task-row.selected {
+    color: HighlightText;
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  .task-row.selected .task-count,
+  .task-row.selected .task-check {
+    color: HighlightText;
+  }
+
+  .progress-track > span,
+  .round-marks i.filled,
+  .capacity-ticks i.done {
+    forced-color-adjust: none;
+    background: Highlight;
+  }
+
+  .primary-control,
+  .small-primary,
+  .danger-button {
+    forced-color-adjust: none;
+  }
+}

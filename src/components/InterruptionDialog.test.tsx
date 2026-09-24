@@ -32,7 +32,9 @@ describe("capturing an interruption", () => {
 
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     await waitFor(() =>
-      expect((screen.getByRole("button", { name: "Save to inbox" }) as HTMLButtonElement).disabled).toBe(false),
+      expect(
+        (screen.getByRole("button", { name: "Save to inbox" }) as HTMLButtonElement).disabled,
+      ).toBe(false),
     );
     expect(onClose).not.toHaveBeenCalled();
     expect(note.value).toBe("Email Jordan");

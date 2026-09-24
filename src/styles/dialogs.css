@@ -1,0 +1,272 @@
+.dialog-backdrop {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  padding: 24px;
+  place-items: center;
+  overflow: auto;
+  background: var(--backdrop);
+}
+
+.dialog {
+  width: min(100%, 480px);
+  max-height: calc(100dvh - 48px);
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-menu);
+}
+
+.capture-dialog {
+  padding: 22px 24px 20px;
+}
+
+.capture-dialog h2 {
+  margin: 0 0 18px;
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+.capture-dialog form > input {
+  width: 100%;
+}
+
+.category-choice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 18px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.category-choice legend {
+  width: 100%;
+  margin-bottom: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.category-choice label {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  width: 18px;
+  min-height: 18px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--focus);
+}
+
+.dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 22px;
+}
+
+.settings-dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(100%, 600px);
+}
+
+.dialog-header {
+  display: flex;
+  min-height: 52px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 4px 8px 4px 24px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.dialog-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.settings-dialog > form {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-height: 0;
+}
+
+.settings-scroll {
+  min-height: 0;
+  padding: 0 24px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.settings-scroll fieldset {
+  margin: 0;
+  padding: 18px 0;
+  border: 0;
+  border-bottom: 1px solid var(--divider);
+}
+
+.settings-scroll fieldset:last-child {
+  border-bottom: 0;
+}
+
+.settings-scroll legend {
+  margin-bottom: 8px;
+  padding: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.setting-row,
+.toggle-row,
+.data-row {
+  display: flex;
+  min-width: 0;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 4px 0;
+}
+
+.setting-row > label {
+  overflow-wrap: anywhere;
+}
+
+.number-setting {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.number-setting input {
+  width: 76px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.setting-row select {
+  min-width: 132px;
+}
+
+.toggle-row {
+  cursor: pointer;
+}
+
+.toggle-row > span,
+.data-row > span:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.toggle-row strong,
+.data-row strong {
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.toggle-row small,
+.data-row small {
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.toggle-row > input {
+  flex: 0 0 auto;
+}
+
+.data-row {
+  align-items: flex-start;
+}
+
+.data-row > .secondary-control,
+.clear-confirm {
+  flex: 0 0 auto;
+}
+
+.clear-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.shortcut-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+}
+
+.shortcut-list > div {
+  display: grid;
+  grid-template-columns: 108px minmax(0, 1fr);
+  min-height: 36px;
+  align-items: center;
+  border-bottom: 1px solid var(--divider);
+}
+
+.shortcut-list > div:last-child {
+  border-bottom: 0;
+}
+
+.shortcut-list dt,
+.shortcut-list dd {
+  min-width: 0;
+  margin: 0;
+}
+
+.shortcut-list dd {
+  color: var(--text-muted);
+}
+
+.settings-actions {
+  min-height: 60px;
+  margin: 0;
+  padding: 9px 24px;
+  background: var(--surface);
+  border-top: 1px solid var(--divider);
+}
+
+.live-notice {
+  position: fixed;
+  z-index: 140;
+  right: 16px;
+  bottom: 16px;
+  max-width: min(360px, calc(100vw - 32px));
+  padding: 10px 12px;
+  overflow-wrap: anywhere;
+  background: var(--surface-raised);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-menu);
+  color: var(--text);
+}
+
+.live-notice:empty {
+  visibility: hidden;
+  padding: 0;
+  border: 0;
+}
+
+.sidebar-scrim {
+  display: none;
+}

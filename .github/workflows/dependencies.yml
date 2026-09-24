@@ -1,0 +1,56 @@
+name: Dependency review
+
+on:
+  pull_request:
+    paths:
+      - package.json
+      - package-lock.json
+      - scripts/check-licenses.mjs
+      - src-tauri/Cargo.toml
+      - src-tauri/Cargo.lock
+      - src-tauri/deny.toml
+      - .github/workflows/dependencies.yml
+  schedule:
+    - cron: "23 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  npm:
+    name: npm advisories and licenses
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Audit dependencies including development tools
+        run: npm audit --audit-level=high
+      - name: Check license metadata
+        if: ${{ !cancelled() }}
+        run: npm run licenses:check
+
+  cargo:
+    name: Rust advisories and licenses
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          workspaces: src-tauri
+      - name: Install auditing tools
+        run: |
+          cargo install --locked cargo-audit --version 0.22.2
+          cargo install --locked cargo-deny --version 0.20.2
+      - name: Audit locked dependencies
+        working-directory: src-tauri
+        run: cargo audit
+      - name: Check dependency licenses
+        if: ${{ !cancelled() }}
+        working-directory: src-tauri
+        run: cargo deny --locked check licenses

@@ -22,13 +22,20 @@ function cycleCount(timer: Partial<TimerState>) {
     />,
   );
   const element = container.querySelector(".cycle-count")!;
-  return { announced: element.getAttribute("aria-label"), shown: element.querySelector("span")!.textContent };
+  return {
+    announced: element.getAttribute("aria-label"),
+    shown: element.querySelector("span")!.textContent,
+  };
 }
 
 describe("the round count", () => {
   it.each([
     ["the first focus", { phase: "focus", completedInCycle: 0 }, "Round 1 of 4"],
-    ["a short break after one round", { phase: "shortBreak", completedInCycle: 1 }, "1 of 4 rounds"],
+    [
+      "a short break after one round",
+      { phase: "shortBreak", completedInCycle: 1 },
+      "1 of 4 rounds",
+    ],
     // The backend only resets the count after the long break, so this used to
     // be announced as "Round 5 of 4" over a screen reading "Cycle complete".
     ["the long break", { phase: "longBreak", completedInCycle: 4 }, "Cycle complete"],

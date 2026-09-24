@@ -1,0 +1,38 @@
+name: Bug report
+description: Report a reproducible problem with Pomodoro.
+body:
+  - type: markdown
+    attributes:
+      value: Do not include your data file or captured notification text. See SECURITY.md for sensitive reports.
+  - type: input
+    id: version
+    attributes:
+      label: Pomodoro version and installation method
+      placeholder: 0.1.0, apt / downloaded deb / built from source
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Ubuntu and desktop version
+      placeholder: Ubuntu 24.04, GNOME 46, Wayland
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include timer state, relevant settings, and whether the app was in the tray.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics or screenshots
+      description: Remove names, notification text, task titles, tokens, and personal paths before attaching logs or images.

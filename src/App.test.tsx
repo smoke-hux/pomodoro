@@ -132,7 +132,9 @@ describe("sound", () => {
     try {
       render(<App />);
       await screen.findByRole("button", { name: "Open settings" });
-      await act(async () => broadcast({ ...defaultSnapshot, sessions: [session("just-finished")] }));
+      await act(async () =>
+        broadcast({ ...defaultSnapshot, sessions: [session("just-finished")] }),
+      );
       expect(AudioContext).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
@@ -235,7 +237,8 @@ describe("start-up", () => {
     const order: string[] = [];
     const previous = broadcast;
     invoke.mockImplementation((command: string) => {
-      if (command === "get_snapshot") order.push(broadcast === previous ? "snapshot-first" : "listening-first");
+      if (command === "get_snapshot")
+        order.push(broadcast === previous ? "snapshot-first" : "listening-first");
       return Promise.resolve(command === "get_snapshot" ? defaultSnapshot : undefined);
     });
     render(<App />);
@@ -256,7 +259,12 @@ describe("start-up", () => {
 
     const newer: AppSnapshot = {
       ...defaultSnapshot,
-      timer: { ...defaultSnapshot.timer, phase: "shortBreak", durationSeconds: 300, remainingSeconds: 300 },
+      timer: {
+        ...defaultSnapshot.timer,
+        phase: "shortBreak",
+        durationSeconds: 300,
+        remainingSeconds: 300,
+      },
     };
     await act(async () => broadcast(newer));
     await act(async () => deliver(defaultSnapshot)); // older: still says focus

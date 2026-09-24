@@ -6,11 +6,11 @@ It is a standalone desktop app. There is no account, no cloud, no sync and no ne
 
 ## What it does
 
-**The timer.** A 25-minute focus, a 5-minute short break and a 15-minute long break after four rounds, all adjustable. Breaks can start by themselves when a focus ends, and the next focus can start by itself when a break ends. The deadline is an absolute moment, not a count of ticks, so an interval ends on time whether the window was minimised, the screen was locked or the laptop was asleep. Seven ways of showing the time left — plain digits, a ring, pips, a bar, words, an analogue face, a vessel that empties — are under Settings → Appearance.
+**The timer.** A 25-minute focus, a 5-minute short break and a 15-minute long break after four rounds, all adjustable. Breaks can start by themselves when a focus ends, and the next focus can start by itself when a break ends. The deadline is an absolute moment, not a count of ticks, so an interval ends on time whether the window was minimised, the screen was locked or the laptop was asleep. Ten timer faces — digits, ring, arc, analog, orbit, bar, blocks, pips, vessel and words — are under Settings → Appearance.
 
-**Tasks.** Each task carries an estimate of how many focus sessions it needs and a count of how many it has had; a focus session credits the task it was started for. Tasks can be edited and deleted from their ⋯ menu, ticked off, reopened, and are grouped into *Completed today* and *Completed earlier*. Estimating more than four sessions gets a gentle suggestion to split the work. A focus interval cannot start without a task selected, so every session is attributed to something.
+**Tasks.** Each task carries an estimate of how many focus sessions it needs and a count of how many it has had; a focus session credits the task it was started for. Tasks can be edited and deleted from their ⋯ menu, ticked off, reopened, and are grouped into _Completed today_ and _Completed earlier_. Estimating more than four sessions gets a gentle suggestion to split the work. A focus interval cannot start without a task selected, so every session is attributed to something.
 
-**Interruptions.** Ctrl+I opens a one-line capture for whatever just came up — an email to send, a thought, a knock at the door — without touching the timer. Each note is tagged *internal* or *external* and lands in the interruption inbox for after the interval, where it can be marked handled, turned into a task, or deleted.
+**Interruptions.** Ctrl+I opens a one-line capture for whatever just came up — an email to send, a thought, a knock at the door — without touching the timer. Each note is tagged _internal_ or _external_ and lands in the interruption inbox for after the interval, where it can be marked handled, turned into a task, or deleted.
 
 **Desktop notification capture.** Optionally, Pomodoro watches the desktop notification service and files a copy of what other applications send, so that a message which arrived mid-focus can be read afterwards instead of during. Off by default; see [Desktop notification capture](#desktop-notification-capture).
 
@@ -36,14 +36,14 @@ It is a standalone desktop app. There is no account, no cloud, no sync and no ne
 
 ### Keyboard
 
-| Key | Does |
-|---|---|
-| Space | Start, pause or resume the timer |
-| Ctrl+I | Capture an interruption |
-| Ctrl+N | Add a task |
-| Ctrl+1 / Ctrl+2 / Ctrl+3 | Choose focus, short break or long break (while idle) |
-| Ctrl+, | Open Settings |
-| Escape | Close whatever is innermost: an open menu, then a dialog, then the task drawer |
+| Key                      | Does                                                                           |
+| ------------------------ | ------------------------------------------------------------------------------ |
+| Space                    | Start, pause or resume the timer                                               |
+| Ctrl+I                   | Capture an interruption                                                        |
+| Ctrl+N                   | Add a task                                                                     |
+| Ctrl+1 / Ctrl+2 / Ctrl+3 | Choose focus, short break or long break (while idle)                           |
+| Ctrl+,                   | Open Settings                                                                  |
+| Escape                   | Close whatever is innermost: an open menu, then a dialog, then the task drawer |
 
 Space belongs to whatever control has focus: tabbing to a button and pressing Space presses that button, not the timer. While a dialog is open, everything behind it is inert.
 
@@ -81,7 +81,7 @@ What it does and does not do:
 
 You choose what is worth keeping: a minimum urgency, whether to capture only during focus, a list of muted apps, and a list of priority apps that bypass the other rules. Pomodoro never captures its own notifications. A notification a sender updates in place — a download counting up, a call still ringing — stays one row in the inbox rather than one per update.
 
-The inbox shows each captured notification with its app, urgency, time and whether it arrived during focus. Each can be marked triaged (or moved back to pending), turned into a task, or deleted. Deleting removes the captured copy including its text; a task already made from it stays.
+The inbox shows each captured notification with its app, urgency, time and whether it arrived during focus. Each can be marked triaged (or moved back to pending), turned into a task, or deleted. Deleting removes the copy from the active data file; a task already made from it stays. Previously created backups and exports may still contain the text; use Settings → Backup and transfer → Open data folder to manage recovery copies.
 
 Captured summaries and bodies routinely contain message text and one-time codes. They are written only to the local data file below, which Pomodoro keeps owner-only (`0600`, in a `0700` directory). They are never logged and never leave the machine. Settings → Data has an explicit, confirmed action for deleting every captured copy.
 
@@ -89,15 +89,16 @@ Capture needs a session bus that will hand out a monitor connection, which is th
 
 ## Settings
 
-| Section | What is there |
-|---|---|
-| Timing | Focus, short break and long break lengths; rounds before a long break |
-| Flow | Start breaks automatically; start the next focus automatically |
-| Alerts | Desktop notifications; sound; Test sound |
-| Notification capture | The capture switch and its filters; silence banners during focus |
-| Appearance | Theme; timer face |
-| Data | Clear session history; delete captured notifications — each asks first |
-| Keyboard | The shortcuts above |
+| Section              | What is there                                                                    |
+| -------------------- | -------------------------------------------------------------------------------- |
+| Timing               | Focus, short break and long break lengths; rounds before a long break            |
+| Flow                 | Start breaks automatically; start the next focus automatically                   |
+| Alerts               | Desktop notifications; sound; Test sound                                         |
+| Notification capture | The capture switch and its filters; silence banners during focus                 |
+| Appearance           | Theme; timer face                                                                |
+| Backup and transfer  | Export JSON; import with a preview; export sessions as CSV; open the data folder |
+| Data                 | Clear session history; delete captured notifications — each asks first           |
+| Keyboard             | The shortcuts above                                                              |
 
 Edits belong to you until you press Save: a state change arriving from the timer mid-edit does not overwrite what you were typing, a save the app refuses leaves the dialog open with your edits, and Cancel discards them.
 
@@ -163,6 +164,25 @@ If the file cannot be read at launch — truncated by a full disk, or edited by 
 
 Removing the application does not remove this data file.
 
+### Backups, export and import
+
+Settings → Backup and transfer has four actions:
+
+- **Export data** saves all tasks, settings, interruptions, captured notifications and retained session history to a JSON file chosen in a native file dialog. A running timer is saved as paused in the export. The current timer keeps running.
+- **Export CSV** saves every retained session record, not just the recent history shown in the window. Dates use UTC; task text is quoted and formula-like values are escaped for spreadsheet use.
+- **Choose import** reads and validates a JSON file, then shows its name and record counts. Nothing is replaced until you tick the confirmation and choose **Import and replace**. Reset a running or paused interval before importing. Imported timers stay paused; notification capture and desktop Do Not Disturb are switched off until you enable them on this machine. Imported settings replace saved settings, and the settings dialog closes after success.
+- **Open data folder** opens the folder containing `pomodoro.json` and its `backups/` subfolder.
+
+Before import, a storage-format upgrade or clearing session history, Pomodoro saves a recovery copy. It keeps five copies in `backups/`, with the same owner-only permissions as the main store. Import refuses to replace data if the recovery copy or replacement cannot be written. These backups live on the same disk: export a copy to another location for protection against disk loss.
+
+Exports and backups can contain message text and one-time codes. Deleting a notification or clearing the notification inbox changes the active store only; it does not erase older backups, exports or tasks created from those messages. Remove unneeded copies through your file manager. Pomodoro does not create an additional backup when deleting captured notifications.
+
+JSON imports are limited to 32 MiB, 5,000 sessions and 200 captured notifications. Invalid files, duplicate or empty record IDs, unsupported settings and newer schema versions are rejected before replacement. An export that would exceed the import size limit is refused; CSV remains available for session history.
+
+### Storage versions
+
+The current disk format is `schemaVersion: 1`. Existing unversioned stores load as version 0 and migrate on their next successful save, with their original bytes backed up first. A newer schema encountered by an older application stays at its original path and is protected from writes; use a newer build to open it. Corrupt files still use the recovery behavior described above.
+
 ### Upgrading from the Kipindi build
 
 This app was previously named Kipindi and used the bundle identifier `app.kipindi.timer`, which put its data at a different path. If you ran that build, carry your tasks, settings, and session history across once:
@@ -181,15 +201,18 @@ Required Ubuntu packages:
 
     sudo apt install libwebkit2gtk-4.1-dev build-essential file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 
-Install project dependencies and run the checks. These are the same steps CI runs on every pull request, so running all of them first avoids a red build:
+Use Node.js 22.14 or newer (`.nvmrc` selects Node 22) and stable Rust. Install the locked project dependencies and run the checks:
 
-    npm install
-    npm run build
-    npm test
+    npm ci
+    npm run check
     cd src-tauri
     cargo fmt --all --check
     cargo clippy --all-targets -- -D warnings
     cargo test
+
+`npm run check` runs linting, formatting, dependency-license checks, the TypeScript/production build and frontend tests. Use `npm run format` and `cargo fmt` to apply formatting. CI also runs a real desktop smoke test in an isolated XDG directory and D-Bus session; see [Testing](docs/testing.md) for the required drivers and commands.
+
+See [Contributing](CONTRIBUTING.md) for supported environments and review expectations, [Security](SECURITY.md) for private vulnerability reporting, and [Architecture](docs/architecture.md) for module responsibilities. Weekly dependency updates, advisory/license checks and CodeQL workflows are included; GitHub code-scanning results require the repository feature to be enabled.
 
 No test plays a sound or sends a real notification. Some checks need a real GNOME session — a session bus, a notification daemon, and `gsettings` — so they are marked `#[ignore]` and skipped by CI. Run them on an Ubuntu desktop, from `src-tauri`:
 

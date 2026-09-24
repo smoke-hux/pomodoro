@@ -57,7 +57,13 @@ function DayLedgerComponent({ dayKey, sessions, tasks, interruptions }: DayLedge
               />
             ))}
           </div>
-          <span>{planned > 16 ? "Plan is above 16" : planned > 14 ? "Keep room for overflow" : "12–14 is a full day"}</span>
+          <span>
+            {planned > 16
+              ? "Plan is above 16"
+              : planned > 14
+                ? "Keep room for overflow"
+                : "12–14 is a full day"}
+          </span>
         </div>
         <div className="session-list" role="list" aria-label="Today's session history">
           {today.length === 0 ? (

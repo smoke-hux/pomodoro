@@ -1,130 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Clock3, Inbox, Menu, Monitor, Moon, Settings as SettingsIcon, Sun } from "lucide-react";
-import { listen } from "@tauri-apps/api/event";
 import { api } from "./lib/api";
+import { useAppSnapshot } from "./lib/useAppSnapshot";
+import { useNotice } from "./lib/useNotice";
 import {
   getCompletedFocusCount,
   getCompletedFocusDisplayMinutes,
   getDayBoundsForKey,
   isWithinDay,
 } from "./lib/metrics";
-import {
-  applyTheme,
-  nextTheme,
-  readRememberedTheme,
-  resolveTheme,
-  useSystemDark,
-} from "./lib/theme";
+import { applyTheme, nextTheme, resolveTheme, useSystemDark } from "./lib/theme";
+import { browserPreview } from "./lib/browserPreview";
+import { useAppCommands } from "./lib/useAppCommands";
+import { useKeyboardShortcuts } from "./lib/useKeyboardShortcuts";
 import { useCountdown } from "./lib/useCountdown";
 import { useDayKey } from "./lib/useDayKey";
 import { closeRowMenus, useRowMenus } from "./lib/useRowMenus";
-import { defaultSnapshot } from "./types";
-import type { AppSnapshot, Phase, Settings, ThemePreference } from "./types";
+import type { ThemePreference } from "./types";
 import { TaskSidebar } from "./components/TaskSidebar";
 import { TimerPanel } from "./components/TimerPanel";
 import { DayLedger } from "./components/DayLedger";
 import { InterruptionDialog } from "./components/InterruptionDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
-
-function isTextEntry(target: EventTarget | null) {
-  return (
-    target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    target instanceof HTMLSelectElement ||
-    (target instanceof HTMLElement && target.isContentEditable)
-  );
-}
-
-/**
- * True when Space is already the focused element's own key.
- *
- * Space is the timer's shortcut, but it is also how a keyboard user presses the
- * button they have just tabbed to. The window-level handler used to swallow it
- * either way, so tabbing to "Skip" and pressing Space started the timer and left
- * the button untouched — the control looked focused and did nothing.
- */
-export function activatesOnSpace(target: EventTarget | null) {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target instanceof HTMLButtonElement || target instanceof HTMLAnchorElement) return true;
-  if (target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement) return true;
-  if (target instanceof HTMLInputElement) return true;
-  // <summary> opens its <details> on Space; the row menus are built from them.
-  if (target.tagName === "SUMMARY") return true;
-  const role = target.getAttribute("role");
-  return (
-    role === "button" ||
-    role === "checkbox" ||
-    role === "radio" ||
-    role === "switch" ||
-    role === "tab" ||
-    role === "option" ||
-    role === "menuitem"
-  );
-}
-
-function browserPreview(): AppSnapshot {
-  const now = Date.now();
-  return {
-    ...defaultSnapshot,
-    tasks: [
-      {
-        id: "preview-1",
-        title: "Outline the project brief",
-        estimate: 3,
-        completedPomodoros: 1,
-        done: false,
-        createdAt: now,
-        completedAt: null,
-      },
-      {
-        id: "preview-2",
-        title: "Review research notes",
-        estimate: 2,
-        completedPomodoros: 0,
-        done: false,
-        createdAt: now + 1,
-        completedAt: null,
-      },
-    ],
-    notifications: [
-      {
-        id: "preview-notif-1",
-        appName: "Thunderbird",
-        summary: "Priya Raman — Re: brief review",
-        body: "Sending comments before the standup.",
-        urgency: 1,
-        receivedAt: now - 8 * 60_000,
-        duringFocus: true,
-        triaged: false,
-        replacesId: 0,
-        taskId: null,
-      },
-      {
-        id: "preview-notif-2",
-        appName: "Software Updater",
-        summary: "Updates are available",
-        body: "Security updates are ready to install.",
-        urgency: 0,
-        receivedAt: now - 96 * 60_000,
-        duringFocus: false,
-        triaged: false,
-        replacesId: 0,
-        taskId: null,
-      },
-    ],
-    captureStatus: { state: "active", detail: "" },
-    settings: {
-      ...defaultSnapshot.settings,
-      // The preview has no backend, so the remembered theme is its setting.
-      theme: readRememberedTheme(),
-      notificationFilter: {
-        ...defaultSnapshot.settings.notificationFilter,
-        enabled: true,
-      },
-    },
-    timer: { ...defaultSnapshot.timer, activeTaskId: "preview-1" },
-  };
-}
 
 const themeLabels: Record<ThemePreference, string> = {
   system: "System",
@@ -135,21 +32,17 @@ const themeIcons = { system: Monitor, light: Sun, dark: Moon };
 
 export default function App() {
   const inTauri = "__TAURI_INTERNALS__" in window;
-  // A function, so the preview snapshot — and the storage read inside it — is
-  // built once, not on every render and thrown away.
-  const [snapshot, setSnapshot] = useState<AppSnapshot>(() =>
-    inTauri ? defaultSnapshot : browserPreview(),
+  const { notice, showNotice } = useNotice();
+  const { snapshot, setSnapshot, ready, settingsLoaded } = useAppSnapshot(
+    inTauri,
+    browserPreview,
+    showNotice,
   );
   const [captureOpen, setCaptureOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [addRequest, setAddRequest] = useState(0);
-  const [notice, setNotice] = useState("");
-  const [ready, setReady] = useState(!inTauri);
   const [recoveryDismissed, setRecoveryDismissed] = useState(false);
-  // Whether `snapshot` holds real settings yet, rather than the defaults.
-  const [settingsLoaded, setSettingsLoaded] = useState(!inTauri);
-  const noticeTimer = useRef<number | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
 
   // The countdown lives here, not in the snapshot. The backend sends a
@@ -198,87 +91,6 @@ export default function App() {
     }
   }, []);
 
-  const showNotice = useCallback((message: string) => {
-    setNotice(message);
-    if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
-    noticeTimer.current = window.setTimeout(() => setNotice(""), 3_000);
-  }, []);
-
-  // A command resolves once the backend has applied and saved it. The new state
-  // arrives on "state-changed" — the single channel for every change, whether
-  // it came from this window, the tray, or the clock — so there is nothing to
-  // reconcile between a returned value and a broadcast one.
-  const run = useCallback(
-    async (action: () => Promise<void>, successMessage?: string): Promise<boolean> => {
-      if (!inTauri) {
-        showNotice("Desktop controls are active in the packaged Ubuntu app.");
-        return false;
-      }
-      try {
-        await action();
-        if (successMessage) showNotice(successMessage);
-        return true;
-      } catch (error) {
-        showNotice(typeof error === "string" ? error : "That action could not be completed.");
-        return false;
-      }
-    },
-    [inTauri, showNotice],
-  );
-
-  useEffect(() => {
-    if (!inTauri) return;
-    let cancelled = false;
-    let receivedBroadcast = false;
-
-    const unlisten = listen<AppSnapshot>("state-changed", (event) => {
-      if (cancelled) return;
-      // No sound from here: the backend plays the desktop's own sound when an
-      // interval ends, which works with this window hidden in the tray and
-      // needs no bookkeeping about which sessions this window has seen.
-      receivedBroadcast = true;
-      setSnapshot(event.payload);
-      setSettingsLoaded(true);
-    });
-
-    // Listening first, asking second. The other way round left a gap: a change
-    // broadcast after the snapshot was taken but before the listener was
-    // registered was never seen, and the window showed a finished interval as
-    // still running until something else happened. And once a broadcast has
-    // been applied it is the newer of the two, so a snapshot that arrives
-    // after it must not replace it.
-    void unlisten
-      .then(
-        () => undefined,
-        () => undefined,
-      )
-      .then(() => api.snapshot())
-      .then((next) => {
-        if (cancelled) return;
-        if (!receivedBroadcast) setSnapshot(next);
-        setSettingsLoaded(true);
-        setReady(true);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setReady(true);
-          showNotice("Pomodoro could not open its local data.");
-        }
-      });
-
-    return () => {
-      cancelled = true;
-      void unlisten.then((stop) => stop());
-    };
-  }, [inTauri, showNotice]);
-
-  useEffect(
-    () => () => {
-      if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current);
-    },
-    [],
-  );
-
   // Not before the stored settings have arrived — and not at all if they never
   // do: until then the snapshot holds the default, and applying that would
   // repaint a Dark user's window as System and overwrite the remembered choice
@@ -311,97 +123,30 @@ export default function App() {
   const closeCapture = useCallback(() => closeDialog(setCaptureOpen), [closeDialog]);
   const closeSettings = useCallback(() => closeDialog(setSettingsOpen), [closeDialog]);
 
-  const selectPhase = useCallback(
-    (phase: Phase) => void run(() => api.setPhase(phase)),
-    [run],
-  );
-
-  // Every handler below is stable across renders, which is what lets the
-  // memoised sidebar, ledger and dialogs sit out the once-a-second countdown.
-  const toggleTimer = useCallback(() => void run(api.toggleTimer), [run]);
-  const resetTimer = useCallback(() => void run(api.resetTimer, "Interval reset."), [run]);
-  const timerPhase = timer.phase;
-  const skipPhase = useCallback(
-    () =>
-      void run(
-        api.skipPhase,
-        timerPhase === "focus" ? "Focus ended without credit." : "Break skipped.",
-      ),
-    [run, timerPhase],
-  );
-  const selectTask = useCallback(
-    (id: string) => {
-      void run(() => api.selectTask(id));
-      setSidebarOpen(false);
-    },
-    [run],
-  );
-  const addTask = useCallback(
-    (title: string, estimate: number) => run(() => api.addTask(title, estimate), "Task added."),
-    [run],
-  );
-  const updateTask = useCallback(
-    (id: string, title: string, estimate: number) =>
-      run(() => api.updateTask(id, title, estimate), "Task updated."),
-    [run],
-  );
-  const toggleTask = useCallback((id: string) => void run(() => api.toggleTask(id)), [run]);
-  const deleteTask = useCallback(
-    (id: string) => void run(() => api.deleteTask(id), "Task deleted."),
-    [run],
-  );
-  const handleInterruption = useCallback(
-    (id: string, handled: boolean) =>
-      void run(
-        () => api.setInterruptionHandled(id, handled),
-        handled ? "Marked handled." : "Moved back to the inbox.",
-      ),
-    [run],
-  );
-  const convertInterruption = useCallback(
-    (id: string) => void run(() => api.convertInterruption(id), "Added to today’s tasks."),
-    [run],
-  );
-  const deleteInterruption = useCallback(
-    (id: string) => void run(() => api.deleteInterruption(id), "Interruption deleted."),
-    [run],
-  );
-  const triageNotification = useCallback(
-    (id: string, triaged: boolean) =>
-      void run(
-        () => api.triageNotification(id, triaged),
-        triaged ? "Marked triaged." : "Moved back to pending.",
-      ),
-    [run],
-  );
-  const convertNotification = useCallback(
-    (id: string) => void run(() => api.convertNotification(id), "Added to today’s tasks."),
-    [run],
-  );
-  const deleteNotification = useCallback(
-    (id: string) => void run(() => api.deleteNotification(id), "Notification deleted."),
-    [run],
-  );
-  const saveInterruption = useCallback(
-    (text: string, category: "internal" | "external") =>
-      run(() => api.captureInterruption(text, category), "Saved. Return to your focus."),
-    [run],
-  );
-  const saveSettings = useCallback(
-    (settings: Settings) => run(() => api.updateSettings(settings), "Settings saved."),
-    [run],
-  );
-  // Resolves once the sound has played or failed: the backend answers only
-  // then, so the button can say it is playing and the failure, if any, is
-  // shown as a notice.
-  const previewSound = useCallback(() => run(api.previewSound), [run]);
-  const clearHistory = useCallback(async () => {
-    await run(api.clearHistory, "Session history cleared.");
-  }, [run]);
-  const clearNotifications = useCallback(async () => {
-    await run(api.clearNotifications, "Captured notifications cleared.");
-  }, [run]);
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
+  const {
+    run,
+    selectPhase,
+    toggleTimer,
+    resetTimer,
+    skipPhase,
+    selectTask,
+    addTask,
+    updateTask,
+    toggleTask,
+    deleteTask,
+    handleInterruption,
+    convertInterruption,
+    deleteInterruption,
+    triageNotification,
+    convertNotification,
+    deleteNotification,
+    saveInterruption,
+    saveSettings,
+    previewSound,
+    clearHistory,
+    clearNotifications,
+  } = useAppCommands(inTauri, timer.phase, showNotice, closeSidebar);
 
   // The toolbar button steps System → Light → Dark and saves at once. It sends
   // the settings as last received, never the settings dialog's unsaved draft.
@@ -438,68 +183,22 @@ export default function App() {
       // broadcasts can land in one render, and nothing is seen to change.
       if (requestedTheme.current === next) requestedTheme.current = null;
     });
-  }, [inTauri, run, settings, settingsLoaded]);
+  }, [inTauri, run, settings, settingsLoaded, setSnapshot]);
 
   useRowMenus();
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        // An open row menu is the innermost thing on screen, so it goes first
-        // and focus returns to the button that opened it.
-        const menu = document.querySelector<HTMLDetailsElement>("details.row-menu[open]");
-        if (menu && !captureOpen && !settingsOpen) {
-          menu.open = false;
-          menu.querySelector("summary")?.focus();
-          return;
-        }
-        if (captureOpen) closeCapture();
-        else if (settingsOpen) closeSettings();
-        else setSidebarOpen(false);
-        return;
-      }
-      // A modal owns the keyboard while it is open. Without this guard the
-      // window-level handler still fires underneath it, so Space on a dialog
-      // button would both press the button and toggle the timer behind it.
-      if (captureOpen || settingsOpen) return;
-      if (isTextEntry(event.target)) return;
-      if (event.code === "Space") {
-        // A held key repeats, and every repeat was another start or pause —
-        // dozens of saves, ending in whichever state the last one landed on.
-        // With a modifier it is somebody else's shortcut, not this one.
-        if (event.repeat || event.ctrlKey || event.altKey || event.metaKey) return;
-        // The focused control gets its own key back.
-        if (activatesOnSpace(event.target)) return;
-        event.preventDefault();
-        toggleTimer();
-      } else if (event.ctrlKey && event.key.toLowerCase() === "i") {
-        event.preventDefault();
-        openCapture();
-      } else if (event.ctrlKey && event.key.toLowerCase() === "n") {
-        event.preventDefault();
-        openAddTask();
-      } else if (event.ctrlKey && event.key === ",") {
-        event.preventDefault();
-        openSettings();
-      } else if (event.ctrlKey && ["1", "2", "3"].includes(event.key)) {
-        event.preventDefault();
-        const phases: Phase[] = ["focus", "shortBreak", "longBreak"];
-        selectPhase(phases[Number(event.key) - 1]);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [
+  useKeyboardShortcuts({
     captureOpen,
+    settingsOpen,
     closeCapture,
     closeSettings,
-    openAddTask,
+    closeSidebar,
     openCapture,
     openSettings,
-    selectPhase,
-    settingsOpen,
+    openAddTask,
     toggleTimer,
-  ]);
+    selectPhase,
+  });
 
   // While a dialog is open everything behind it is inert: not focusable, not
   // clickable, not read out. The dialogs promise that with aria-modal, and
@@ -578,7 +277,7 @@ export default function App() {
             <strong>Pomodoro could not read its saved data and has started fresh.</strong>{" "}
             {snapshot.recoveredStore
               ? `Nothing was deleted: the old file is kept as ${snapshot.recoveredStore}, next to pomodoro.json in the app’s data folder.`
-              : "The old file could not be moved aside either, so to leave it untouched nothing is being saved: what you do now is lost when Pomodoro quits. Move or repair pomodoro.json in the app’s data folder, then start Pomodoro again."}
+              : "The original file has been left untouched, so nothing is being saved: what you do now is lost when Pomodoro quits. If the file came from a newer build, open it with that version. Otherwise, move or repair pomodoro.json in the app’s data folder, then start Pomodoro again."}
           </p>
           <button className="text-button" type="button" onClick={() => setRecoveryDismissed(true)}>
             Dismiss

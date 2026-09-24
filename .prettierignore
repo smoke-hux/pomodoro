@@ -1,0 +1,12 @@
+.agents/
+.codex/
+.playwright-mcp/
+node_modules/
+dist/
+test-artifacts/
+src-tauri/target/
+src-tauri/gen/
+package-lock.json
+Cargo.lock
+*.deb
+*.AppImage

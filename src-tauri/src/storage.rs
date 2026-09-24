@@ -5,7 +5,11 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use crate::domain::AppData;
+use crate::{domain::AppData, schema};
+
+#[cfg(test)]
+#[path = "storage_tests.rs"]
+mod migration_tests;
 
 /// The store holds captured notification text: message contents, sender names
 /// and one-time codes. On a shared machine the default umask would leave it
@@ -46,6 +50,7 @@ pub struct Store {
     /// The file at `path` is then the only copy of whatever the person had,
     /// and [`Store::save`] leaves it alone for the rest of the session.
     writable: AtomicBool,
+    migration_pending: AtomicBool,
 }
 
 impl Store {
@@ -53,6 +58,7 @@ impl Store {
         Self {
             path: data_dir.as_ref().join("pomodoro.json"),
             writable: AtomicBool::new(true),
+            migration_pending: AtomicBool::new(false),
         }
     }
 
@@ -63,8 +69,19 @@ impl Store {
 
         let bytes = fs::read(&self.path)
             .map_err(|error| format!("could not read {}: {error}", self.path.display()))?;
-        serde_json::from_slice(&bytes)
-            .map_err(|error| format!("could not parse {}: {error}", self.path.display()))
+        match schema::decode(&bytes) {
+            Ok((data, migrated)) => {
+                self.migration_pending.store(migrated, Ordering::Release);
+                Ok(data)
+            }
+            Err(error) => {
+                // A downgrade must leave the newer store at its original path.
+                if matches!(error, schema::DecodeError::FutureVersion(_)) {
+                    self.writable.store(false, Ordering::Release);
+                }
+                Err(format!("could not read {}: {error}", self.path.display()))
+            }
+        }
     }
 
     /// Loads the store, and if it exists but cannot be read, moves it aside
@@ -89,6 +106,13 @@ impl Store {
             Err(error) => error,
         };
         eprintln!("{error}; starting with an empty local data set");
+
+        if !self.writable.load(Ordering::Acquire) {
+            return AppData {
+                recovered_store: Some(String::new()),
+                ..AppData::default()
+            };
+        }
 
         let aside = self
             .path
@@ -137,28 +161,103 @@ impl Store {
             .map_err(|error| format!("could not create {}: {error}", parent.display()))?;
         restrict(parent, DIRECTORY_MODE);
 
-        let temporary = self.path.with_extension("json.tmp");
-        // Compact rather than pretty-printed: the file is read by this app,
-        // not by people, and indentation roughly doubled every write.
-        let bytes = serde_json::to_vec(data)
-            .map_err(|error| format!("could not serialize local data: {error}"))?;
-        let mut file = fs::File::create(&temporary)
-            .map_err(|error| format!("could not create {}: {error}", temporary.display()))?;
-        // Narrowed before any bytes are written, so the private contents are
-        // never briefly readable by other users on the machine.
-        restrict(&temporary, FILE_MODE);
-        file.write_all(&bytes)
-            .and_then(|_| file.sync_all())
-            .map_err(|error| format!("could not write {}: {error}", temporary.display()))?;
-        fs::rename(&temporary, &self.path).map_err(|error| {
-            format!(
-                "could not replace {} with saved data: {error}",
-                self.path.display()
-            )
-        })?;
-        restrict(&self.path, FILE_MODE);
+        if self.migration_pending.load(Ordering::Acquire) && self.path.exists() {
+            let previous = fs::read(&self.path).map_err(|error| error.to_string())?;
+            self.backup_bytes(&previous, chrono::Utc::now().timestamp_millis())?;
+        }
+        write_private(&self.path, &schema::encode(data)?)?;
+        self.migration_pending.store(false, Ordering::Release);
         Ok(())
     }
+
+    pub fn directory(&self) -> &Path {
+        self.path.parent().expect("the store always has a parent")
+    }
+
+    pub fn ensure_writable(&self) -> Result<(), String> {
+        if self.writable.load(Ordering::Acquire) {
+            Ok(())
+        } else {
+            Err("The local data file is protected. Repair it and restart Pomodoro before importing or clearing data.".into())
+        }
+    }
+
+    /// Keep the five newest recovery points. Called before imports, schema
+    /// migration and clearing session history, not when deleting private notes.
+    pub fn backup(&self, data: &AppData, now_ms: i64) -> Result<PathBuf, String> {
+        self.ensure_writable()?;
+        self.backup_bytes(&schema::encode(data)?, now_ms)
+    }
+
+    fn backup_bytes(&self, bytes: &[u8], now_ms: i64) -> Result<PathBuf, String> {
+        let directory = self.directory().join("backups");
+        fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+        restrict(self.directory(), DIRECTORY_MODE);
+        restrict(&directory, DIRECTORY_MODE);
+        let path = directory.join(format!(
+            "pomodoro-{now_ms:020}-{}.json",
+            uuid::Uuid::new_v4()
+        ));
+        write_private(&path, bytes)?;
+        let mut backups: Vec<_> = fs::read_dir(&directory)
+            .map_err(|error| error.to_string())?
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with("pomodoro-")
+                    && name.ends_with(".json")
+                    && entry.file_type().is_ok_and(|kind| kind.is_file())
+            })
+            .map(|entry| entry.path())
+            // The new recovery point must survive even when timestamps tie
+            // or the wall clock moved backwards. Keep it plus four older ones.
+            .filter(|existing| existing != &path)
+            .collect();
+        backups.sort();
+        let obsolete = backups.len().saturating_sub(4);
+        for old in backups.into_iter().take(obsolete) {
+            fs::remove_file(&old).map_err(|error| format!("Could not rotate a backup: {error}"))?;
+        }
+        Ok(path)
+    }
+}
+
+/// Create the temporary file with private permissions from its first byte,
+/// then replace atomically. Export failures cannot truncate an existing file.
+pub fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or("The chosen file has no parent folder.")?;
+    let temporary = parent.join(format!(".pomodoro-{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(FILE_MODE);
+        }
+        let mut file = options
+            .open(&temporary)
+            .map_err(|error| format!("Could not create the saved file: {error}"))?;
+        file.write_all(bytes)
+            .and_then(|_| file.sync_all())
+            .map_err(|error| format!("Could not write the saved file: {error}"))?;
+        fs::rename(&temporary, path)
+            .map_err(|error| format!("Could not replace the saved file: {error}"))?;
+        // Once rename succeeds the change is committed. A directory sync
+        // failure must not make callers keep old in-memory data after an import.
+        #[cfg(unix)]
+        if let Err(error) = fs::File::open(parent).and_then(|directory| directory.sync_all()) {
+            eprintln!("could not sync the data directory: {error}");
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }
 
 #[cfg(test)]

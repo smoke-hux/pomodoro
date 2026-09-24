@@ -11,7 +11,8 @@ afterEach(() => {
 function menu(): HTMLDetailsElement {
   const details = document.createElement("details");
   details.className = "row-menu";
-  details.innerHTML = '<summary>More</summary><div class="menu-popover"><button>Edit</button></div>';
+  details.innerHTML =
+    '<summary>More</summary><div class="menu-popover"><button>Edit</button></div>';
   document.body.append(details);
   return details;
 }
@@ -50,7 +51,10 @@ describe("placing a row menu", () => {
   });
 
   it("prefers below when the window is too short for either direction", () => {
-    const placement = placeMenu({ top: 60, bottom: 100, right: 250 }, 82, { width: 760, height: 200 });
+    const placement = placeMenu({ top: 60, bottom: 100, right: 250 }, 82, {
+      width: 760,
+      height: 200,
+    });
     expect(placement.top).toBe(102);
   });
 });

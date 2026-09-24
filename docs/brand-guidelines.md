@@ -6,13 +6,13 @@
 
 ## Quick Reference
 
-| Element | Value |
-|---------|-------|
-| Primary Color | #98452B |
-| Secondary Color | #667044 |
-| Accent Color | #DD825D |
-| Primary Font | Ubuntu Sans |
-| Voice | Calm, Plain, Unhurried |
+| Element         | Value                  |
+| --------------- | ---------------------- |
+| Primary Color   | #98452B                |
+| Secondary Color | #667044                |
+| Accent Color    | #DD825D                |
+| Primary Font    | Ubuntu Sans            |
+| Voice           | Calm, Plain, Unhurried |
 
 ---
 
@@ -49,54 +49,54 @@ peripherally, without reading a label.
 
 ### Primary Colors
 
-| Name | Hex | RGB | Usage |
-|------|-----|-----|-------|
-| Ember | #98452B | rgb(152,69,43) | Focus phase, primary action, progress fill |
-| Ember Dark | #7D351F | rgb(125,53,31) | Hover and pressed states |
+| Name       | Hex     | RGB            | Usage                                      |
+| ---------- | ------- | -------------- | ------------------------------------------ |
+| Ember      | #98452B | rgb(152,69,43) | Focus phase, primary action, progress fill |
+| Ember Dark | #7D351F | rgb(125,53,31) | Hover and pressed states                   |
 
 ### Secondary Colors
 
-| Name | Hex | RGB | Usage |
-|------|-----|-----|-------|
-| Olive | #667044 | rgb(102,112,68) | Break phases, rest states |
-| Olive Dark | #535C37 | rgb(83,92,55) | Break hover and pressed states |
+| Name       | Hex     | RGB             | Usage                          |
+| ---------- | ------- | --------------- | ------------------------------ |
+| Olive      | #667044 | rgb(102,112,68) | Break phases, rest states      |
+| Olive Dark | #535C37 | rgb(83,92,55)   | Break hover and pressed states |
 
 ### Accent Colors
 
-| Name | Hex | RGB | Usage |
-|------|-----|-----|-------|
+| Name        | Hex     | RGB             | Usage                          |
+| ----------- | ------- | --------------- | ------------------------------ |
 | Ember Light | #DD825D | rgb(221,130,93) | Dark-theme primary, highlights |
 
 ### Neutral Palette
 
-| Name | Hex | RGB | Usage |
-|------|-----|-----|-------|
-| Canvas | #F2EEE7 | rgb(242,238,231) | Application ground |
-| Surface | #FBF8F3 | rgb(251,248,243) | Panels, cards |
-| Surface Raised | #FFFDF9 | rgb(255,253,249) | Dialogs, menus |
-| Text Primary | #25211D | rgb(37,33,29) | Headings, body, the clock |
-| Text Secondary | #6B635B | rgb(107,99,91) | Captions, metadata |
-| Divider | #D7D0C7 | rgb(215,208,199) | Rules, borders |
+| Name           | Hex     | RGB              | Usage                     |
+| -------------- | ------- | ---------------- | ------------------------- |
+| Canvas         | #F2EEE7 | rgb(242,238,231) | Application ground        |
+| Surface        | #FBF8F3 | rgb(251,248,243) | Panels, cards             |
+| Surface Raised | #FFFDF9 | rgb(255,253,249) | Dialogs, menus            |
+| Text Primary   | #25211D | rgb(37,33,29)    | Headings, body, the clock |
+| Text Secondary | #6B635B | rgb(107,99,91)   | Captions, metadata        |
+| Divider        | #D7D0C7 | rgb(215,208,199) | Rules, borders            |
 
 ### Semantic Colors
 
-| State | Hex | Usage |
-|-------|-----|-------|
+| State   | Hex     | Usage                                     |
+| ------- | ------- | ----------------------------------------- |
 | Success | #667044 | Completed sessions, handled interruptions |
-| Warning | #98452B | Over-estimated tasks, capacity limits |
-| Error | #9B3632 | Destructive confirmation, load failures |
-| Info | #6B635B | Neutral notices |
+| Warning | #98452B | Over-estimated tasks, capacity limits     |
+| Error   | #9B3632 | Destructive confirmation, load failures   |
+| Info    | #6B635B | Neutral notices                           |
 
 ### Accessibility
 
 Measured against the WCAG 2.1 relative-luminance formula:
 
-| Pair | Ratio | Grade |
-|------|-------|-------|
-| Text Primary on Canvas | 13.0:1 | AAA |
-| Text Secondary on Canvas | 5.10:1 | AA |
-| White on Ember | 6.53:1 | AA |
-| White on Olive | 5.30:1 | AA |
+| Pair                     | Ratio  | Grade |
+| ------------------------ | ------ | ----- |
+| Text Primary on Canvas   | 13.0:1 | AAA   |
+| Text Secondary on Canvas | 5.10:1 | AA    |
+| White on Ember           | 6.53:1 | AA    |
+| White on Olive           | 5.30:1 | AA    |
 
 Hue is never the sole carrier of meaning: every phase colour is paired with a
 text label, and every state change is announced to the live region.
@@ -118,13 +118,13 @@ an offline-first local app must not make a network request to render.
 
 ### Type Scale
 
-| Element | Size | Weight | Line Height | Notes |
-|---------|------|--------|-------------|-------|
-| Clock | 76px | 300 | 1.0 | Tabular numerals, never reflows |
-| H2 (dialog title) | 19px | 600 | 1.3 | |
-| Body | 14px | 400 | 1.45 | Base |
-| Small | 13px | 400 | 1.45 | Metadata, ledger rows |
-| Caption | 12px | 400 | 1.4 | Shortcut hints |
+| Element           | Size | Weight | Line Height | Notes                           |
+| ----------------- | ---- | ------ | ----------- | ------------------------------- |
+| Clock             | 76px | 300    | 1.0         | Tabular numerals, never reflows |
+| H2 (dialog title) | 19px | 600    | 1.3         |                                 |
+| Body              | 14px | 400    | 1.45        | Base                            |
+| Small             | 13px | 400    | 1.45        | Metadata, ledger rows           |
+| Caption           | 12px | 400    | 1.4         | Shortcut hints                  |
 
 The clock uses `font-variant-numeric: tabular-nums` so digits hold their column
 and the display does not jitter each second.
@@ -149,14 +149,14 @@ in peripheral vision, by someone who does not want to be talking to software.
 
 ### Voice Table
 
-| Situation | Write | Don't write |
-|-----------|-------|-------------|
-| Focus completes | Focus complete. Take a short break. | Great job! You crushed it! |
-| Focus skipped | Focus ended without credit. | Session abandoned :( |
-| Interruption saved | Saved. Return to your focus. | Got it! Logged! |
-| Nothing planned | No tasks yet. | Your task list is empty! Add one! |
-| Load failure | Pomodoro could not open its local data. | Oops! Something went wrong! |
-| Over-estimate | Estimated above four sessions. Consider splitting it. | That's too big! |
+| Situation          | Write                                                 | Don't write                       |
+| ------------------ | ----------------------------------------------------- | --------------------------------- |
+| Focus completes    | Focus complete. Take a short break.                   | Great job! You crushed it!        |
+| Focus skipped      | Focus ended without credit.                           | Session abandoned :(              |
+| Interruption saved | Saved. Return to your focus.                          | Got it! Logged!                   |
+| Nothing planned    | No tasks yet.                                         | Your task list is empty! Add one! |
+| Load failure       | Pomodoro could not open its local data.               | Oops! Something went wrong!       |
+| Over-estimate      | Estimated above four sessions. Consider splitting it. | That's too big!                   |
 
 ---
 
@@ -165,12 +165,12 @@ in peripheral vision, by someone who does not want to be talking to software.
 Motion communicates state change and nothing else. There are no decorative
 animations.
 
-| Element | Duration | Easing |
-|---------|----------|--------|
-| Progress fill | 160ms | linear |
-| Control hover | 120ms | ease-out |
-| Dialog entry | 140ms | ease-out |
-| Paused pulse | 2400ms | ease-in-out, infinite |
+| Element       | Duration | Easing                |
+| ------------- | -------- | --------------------- |
+| Progress fill | 160ms    | linear                |
+| Control hover | 120ms    | ease-out              |
+| Dialog entry  | 140ms    | ease-out              |
+| Paused pulse  | 2400ms   | ease-in-out, infinite |
 
 All motion collapses under `prefers-reduced-motion: reduce`. The paused pulse
 degrades to a static outline — the state stays legible without movement.

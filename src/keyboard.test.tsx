@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { activatesOnSpace } from "./App";
+import { activatesOnSpace } from "./lib/useKeyboardShortcuts";
 
 /**
  * Space starts and pauses the timer from anywhere in the window. It is also how

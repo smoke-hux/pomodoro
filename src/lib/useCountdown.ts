@@ -29,6 +29,10 @@ export function useCountdown(timer: TimerState, now: () => number = Date.now): n
     if (!running) return;
     let timeout: number | null = null;
     const tick = () => {
+      // Restoring the window can arrive before the suspended timeout. Replace
+      // that timeout so focus and visibility events never start extra clocks.
+      if (timeout !== null) window.clearTimeout(timeout);
+      timeout = null;
       const current = now();
       setTicked({ endsAt, remaining: secondsUntil(endsAt, current) });
       if (current >= endsAt) return;
@@ -38,9 +42,16 @@ export function useCountdown(timer: TimerState, now: () => number = Date.now): n
       const untilNextBoundary = (endsAt - current) % 1_000 || 1_000;
       timeout = window.setTimeout(tick, untilNextBoundary);
     };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") tick();
+    };
     tick();
+    window.addEventListener("focus", tick);
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       if (timeout !== null) window.clearTimeout(timeout);
+      window.removeEventListener("focus", tick);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [running, endsAt, now]);
 
@@ -50,8 +61,14 @@ export function useCountdown(timer: TimerState, now: () => number = Date.now): n
   // title — and then corrected itself, a flash at each boundary. Stopped, the
   // answer is the stored value. Running, it is the ticked value unless that was
   // counted against a different deadline, in which case it is computed now.
-  if (!running) return remainingSeconds;
-  return ticked.endsAt === endsAt ? ticked.remaining : secondsUntil(endsAt, now());
+  const remaining = !running
+    ? remainingSeconds
+    : ticked.endsAt === endsAt
+      ? ticked.remaining
+      : secondsUntil(endsAt, now());
+  // Match the backend when the system clock is corrected backwards: an
+  // interval must never display more than its original duration.
+  return Math.min(timer.durationSeconds, remaining);
 }
 
 /** Whole seconds from `nowMs` to `endsAt`, never negative. */

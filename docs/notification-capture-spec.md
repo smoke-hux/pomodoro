@@ -7,7 +7,7 @@ build against this; neither redefines it unilaterally.
 
 Pomodoro observes desktop notifications delivered by other applications, files
 them in a triage list inside the app, and lets the user declare which kinds
-matter. Notifications that arrive mid-focus become reviewable *after* the
+matter. Notifications that arrive mid-focus become reviewable _after_ the
 session, so nothing has to be dealt with while the interval is running.
 
 ### What monitoring is not
@@ -17,7 +17,7 @@ desktop has already accepted it and drawn the banner, so capture **cannot**
 suppress anything: banners still appear and sounds still play. Any copy that
 implies otherwise is wrong and must be corrected.
 
-Going quiet is a separate, opt-in feature — see *Silencing banners* below — and
+Going quiet is a separate, opt-in feature — see _Silencing banners_ below — and
 it works by asking the desktop, not by intercepting the bus.
 
 ## Verified platform facts
@@ -31,16 +31,16 @@ Established by probe on this machine, not assumed:
 
 `Notify` signature (org.freedesktop.Notifications):
 
-| # | Type | Meaning |
-|---|------|---------|
-| 0 | `s` | app_name |
-| 1 | `u` | replaces_id |
-| 2 | `s` | app_icon |
-| 3 | `s` | summary |
-| 4 | `s` | body |
-| 5 | `as` | actions |
-| 6 | `a{sv}` | hints (`urgency` byte: 0 low, 1 normal, 2 critical) |
-| 7 | `i` | expire_timeout |
+| #   | Type    | Meaning                                             |
+| --- | ------- | --------------------------------------------------- |
+| 0   | `s`     | app_name                                            |
+| 1   | `u`     | replaces_id                                         |
+| 2   | `s`     | app_icon                                            |
+| 3   | `s`     | summary                                             |
+| 4   | `s`     | body                                                |
+| 5   | `as`    | actions                                             |
+| 6   | `a{sv}` | hints (`urgency` byte: 0 low, 1 normal, 2 critical) |
+| 7   | `i`     | expire_timeout                                      |
 
 ### Gotcha — the same notification is seen twice
 
@@ -199,12 +199,12 @@ timer ran: at the retention caps that was 862 KB per tick to move one number.
 looks back a week; the full history stays on disk, capped at
 `SESSION_RETENTION` (5,000) records, oldest dropped first.
 
-| Command | Args | Effect |
-|---------|------|--------|
-| `triage_notification` | `id: String`, `triaged: bool` | Mark handled |
-| `convert_notification` | `id: String` | Create a task titled from `summary`, mark triaged. **Idempotent**: a second call returns the task the first one made rather than a duplicate |
-| `delete_notification` | `id: String` | Remove one |
-| `clear_notifications` | – | Remove all |
+| Command                | Args                          | Effect                                                                                                                                       |
+| ---------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `triage_notification`  | `id: String`, `triaged: bool` | Mark handled                                                                                                                                 |
+| `convert_notification` | `id: String`                  | Create a task titled from `summary`, mark triaged. **Idempotent**: a second call returns the task the first one made rather than a duplicate |
+| `delete_notification`  | `id: String`                  | Remove one                                                                                                                                   |
+| `clear_notifications`  | –                             | Remove all                                                                                                                                   |
 
 ## TypeScript mirror (`src/types.ts`)
 

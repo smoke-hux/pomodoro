@@ -154,7 +154,9 @@ function TimerPanelComponent({
             )
           ) : (
             <>
-              <strong>{timer.phase === "longBreak" ? "Take a proper break" : "Step away for a moment"}</strong>
+              <strong>
+                {timer.phase === "longBreak" ? "Take a proper break" : "Step away for a moment"}
+              </strong>
               <span>Look away from the screen, move, and reset.</span>
             </>
           )}
@@ -189,8 +191,7 @@ function TimerPanelComponent({
             onClick={handleSkip}
             title={timer.phase === "focus" ? "End focus without credit" : "Skip this break"}
           >
-            <SkipForward aria-hidden="true" size={17} />{" "}
-            {confirmSkip ? "Discard session?" : "Skip"}
+            <SkipForward aria-hidden="true" size={17} /> {confirmSkip ? "Discard session?" : "Skip"}
           </button>
         </div>
         <p className="shortcut-hint">

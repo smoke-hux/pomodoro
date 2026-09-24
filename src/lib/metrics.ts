@@ -112,8 +112,7 @@ export function getTodayFocusSessions(
   const { start, end } = getLocalDayBounds(now);
 
   return sessions.filter(
-    (session) =>
-      session.phase === "focus" && session.startedAt >= start && session.startedAt < end,
+    (session) => session.phase === "focus" && session.startedAt >= start && session.startedAt < end,
   );
 }
 
@@ -130,9 +129,7 @@ export function getCompletedFocusMinutes(sessions: readonly SessionRecord[]): nu
   return completedSeconds / 60;
 }
 
-export function getInterruptionCounts(
-  interruptions: readonly Interruption[],
-): InterruptionCounts {
+export function getInterruptionCounts(interruptions: readonly Interruption[]): InterruptionCounts {
   return interruptions.reduce<InterruptionCounts>(
     (counts, interruption) => {
       counts.total += 1;
@@ -151,8 +148,7 @@ export function getTodayInterruptionCounts(
   const { start, end } = getLocalDayBounds(now);
   return getInterruptionCounts(
     interruptions.filter(
-      (interruption) =>
-        interruption.capturedAt >= start && interruption.capturedAt < end,
+      (interruption) => interruption.capturedAt >= start && interruption.capturedAt < end,
     ),
   );
 }

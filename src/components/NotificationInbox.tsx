@@ -71,10 +71,7 @@ function NotificationRow({
   const word = URGENCY_WORD[index];
 
   return (
-    <div
-      className={`notice-row ${item.triaged ? "triaged" : ""}`}
-      role="listitem"
-    >
+    <div className={`notice-row ${item.triaged ? "triaged" : ""}`} role="listitem">
       <button
         className="notice-check"
         type="button"
@@ -97,9 +94,7 @@ function NotificationRow({
       <div className="notice-content">
         <p className="notice-meta">
           <span className="notice-app">{appName}</span>
-          <span className={`notice-urgency ${URGENCY_CLASS[index]}`}>
-            {word}
-          </span>
+          <span className={`notice-urgency ${URGENCY_CLASS[index]}`}>{word}</span>
           {item.duringFocus && <span className="notice-during">During focus</span>}
           <time dateTime={toIsoTime(item.receivedAt)} title={absoluteTime(item.receivedAt)}>
             {formatRelativeTime(item.receivedAt, now)}
@@ -121,8 +116,8 @@ function NotificationRow({
         {confirmingDelete ? (
           <div className="menu-popover notice-menu confirming">
             <p className="menu-note">
-              Removes this captured copy, including its message text. Any task
-              already made from it stays.
+              Removes this captured copy, including its message text. Any task already made from it
+              stays.
             </p>
             <button type="button" onClick={onCancelDelete}>
               Keep it
@@ -190,9 +185,7 @@ function NotificationInboxComponent({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const { pending, triaged } = useMemo(() => {
-    const newestFirst = [...notifications].sort(
-      (a, b) => b.receivedAt - a.receivedAt,
-    );
+    const newestFirst = [...notifications].sort((a, b) => b.receivedAt - a.receivedAt);
     return {
       pending: newestFirst.filter((item) => !item.triaged),
       triaged: newestFirst.filter((item) => item.triaged),
@@ -228,10 +221,7 @@ function NotificationInboxComponent({
   };
 
   return (
-    <section
-      className="sidebar-section notice-section"
-      aria-labelledby="notifications-heading"
-    >
+    <section className="sidebar-section notice-section" aria-labelledby="notifications-heading">
       <div className="section-bar">
         <h2 id="notifications-heading">System notifications</h2>
         {pending.length > 0 && (
@@ -267,14 +257,13 @@ function NotificationInboxComponent({
         {pending.length === 0 ? (
           captureEnabled ? (
             <p className="empty-copy">
-              Nothing captured yet. Notifications from other apps will be filed
-              here for review after focus. Capture files a copy; it does not stop
-              the banner appearing.
+              Nothing captured yet. Notifications from other apps will be filed here for review
+              after focus. Capture files a copy; it does not stop the banner appearing.
             </p>
           ) : (
             <p className="empty-copy">
-              Capture is off. Turn it on in settings to file notifications from
-              other apps here instead of reading them mid-session.
+              Capture is off. Turn it on in settings to file notifications from other apps here
+              instead of reading them mid-session.
             </p>
           )
         ) : (

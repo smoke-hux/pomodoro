@@ -1,9 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type {
-  AppSnapshot,
-  Phase,
-  Settings,
-} from "../types";
+import type { AppSnapshot, ImportPreview, Phase, Settings } from "../types";
 
 type CommandArgs = Record<string, unknown>;
 
@@ -28,32 +24,30 @@ export const api = {
   skipPhase: () => command("skip_phase"),
   setPhase: (phase: Phase) => command("set_phase", { phase }),
   selectTask: (taskId: string | null) => command("select_task", { taskId }),
-  addTask: (title: string, estimate: number) =>
-    command("add_task", { title, estimate }),
+  addTask: (title: string, estimate: number) => command("add_task", { title, estimate }),
   updateTask: (id: string, title: string, estimate: number) =>
     command("update_task", { id, title, estimate }),
   toggleTask: (id: string) => command("toggle_task", { id }),
   deleteTask: (id: string) => command("delete_task", { id }),
-  captureInterruption: (
-    text: string,
-    category: "internal" | "external",
-  ) => command("capture_interruption", { text, category }),
+  captureInterruption: (text: string, category: "internal" | "external") =>
+    command("capture_interruption", { text, category }),
   setInterruptionHandled: (id: string, handled: boolean) =>
     command("set_interruption_handled", { id, handled }),
-  deleteInterruption: (id: string) =>
-    command("delete_interruption", { id }),
-  convertInterruption: (id: string) =>
-    command("convert_interruption_to_task", { id }),
-  updateSettings: (settings: Settings) =>
-    command("update_settings", { settings }),
+  deleteInterruption: (id: string) => command("delete_interruption", { id }),
+  convertInterruption: (id: string) => command("convert_interruption_to_task", { id }),
+  updateSettings: (settings: Settings) => command("update_settings", { settings }),
   /** Plays the interval-finished sound once, whatever the sound setting says. */
   previewSound: () => command("preview_sound"),
   clearHistory: () => command("clear_history"),
   triageNotification: (id: string, triaged: boolean) =>
     command("triage_notification", { id, triaged }),
-  convertNotification: (id: string) =>
-    command("convert_notification", { id }),
-  deleteNotification: (id: string) =>
-    command("delete_notification", { id }),
+  convertNotification: (id: string) => command("convert_notification", { id }),
+  deleteNotification: (id: string) => command("delete_notification", { id }),
   clearNotifications: () => command("clear_notifications"),
+  exportData: () => invoke<string | null>("export_data"),
+  exportSessionsCsv: () => invoke<string | null>("export_sessions_csv"),
+  previewImport: () => invoke<ImportPreview | null>("preview_import"),
+  confirmImport: (token: string) => command("confirm_import", { token }),
+  cancelImport: (token: string) => command("cancel_import", { token }),
+  openDataLocation: () => command("open_data_location"),
 };

@@ -1,0 +1,45 @@
+.data-transfer .data-row > span {
+  min-width: 0;
+}
+.data-transfer .data-row > button {
+  flex-shrink: 0;
+}
+.import-preview {
+  border: 1px solid var(--divider);
+  padding: 16px;
+  margin: 12px 0;
+}
+.import-preview h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.import-preview p,
+.transfer-message {
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.import-confirmation {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+}
+.import-confirmation input {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+.import-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 16px;
+}
+@media (max-width: 560px) {
+  .data-transfer .data-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+}

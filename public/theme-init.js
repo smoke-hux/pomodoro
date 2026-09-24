@@ -14,7 +14,7 @@
     if (stored === "light" || stored === "dark" || stored === "system") {
       document.documentElement.dataset.theme = stored;
     }
-  } catch (error) {
+  } catch {
     // Storage is unavailable; the markup's data-theme="system" stands.
   }
 })();

@@ -5,3 +5,5 @@ src-tauri/target/
 *.log
 *.AppImage
 *.deb
+test-artifacts/
+.playwright-mcp/

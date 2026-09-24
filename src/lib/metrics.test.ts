@@ -21,20 +21,11 @@ import {
   toIsoTime,
 } from "./metrics";
 
-const localTime = (
-  year: number,
-  month: number,
-  day: number,
-  hour = 0,
-  minute = 0,
-  second = 0,
-) => new Date(year, month, day, hour, minute, second).getTime();
+const localTime = (year: number, month: number, day: number, hour = 0, minute = 0, second = 0) =>
+  new Date(year, month, day, hour, minute, second).getTime();
 
 let sessionNumber = 0;
-const makeSession = (
-  startedAt: number,
-  overrides: Partial<SessionRecord> = {},
-): SessionRecord => ({
+const makeSession = (startedAt: number, overrides: Partial<SessionRecord> = {}): SessionRecord => ({
   id: `session-${(sessionNumber += 1)}`,
   phase: "focus",
   taskId: "task-a",
@@ -206,7 +197,9 @@ describe("task metrics", () => {
       "task-b": 1,
       "archived-task": 1,
     });
-    expect(getTaskActuals(tasks, sessions).map(({ taskId, actual }) => ({ taskId, actual }))).toEqual([
+    expect(
+      getTaskActuals(tasks, sessions).map(({ taskId, actual }) => ({ taskId, actual })),
+    ).toEqual([
       { taskId: "task-a", actual: 2 },
       { taskId: "task-b", actual: 1 },
       { taskId: "task-c", actual: 0 },
@@ -312,7 +305,11 @@ describe("the seven-day series over stored timestamps", () => {
     });
 
     const series = getSevenDayCompletedFocusSeries(
-      [session("bad", 9e18), session("today", now - 3_600_000), session("yesterday", now - 86_400_000)],
+      [
+        session("bad", 9e18),
+        session("today", now - 3_600_000),
+        session("yesterday", now - 86_400_000),
+      ],
       now,
     );
     expect(series.map((day) => day.count)).toEqual([0, 0, 0, 0, 0, 1, 1]);
