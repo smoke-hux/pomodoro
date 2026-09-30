@@ -298,6 +298,97 @@ describe("the Space shortcut", () => {
   });
 });
 
+describe("the Ctrl+S shortcut", () => {
+  function skips() {
+    return invoke.mock.calls.filter(([command]) => command === "skip_phase").length;
+  }
+
+  function withTimer(timer: Partial<(typeof defaultSnapshot)["timer"]>): AppSnapshot {
+    return { ...defaultSnapshot, timer: { ...defaultSnapshot.timer, ...timer } };
+  }
+
+  it("skips a running break in one press", async () => {
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(
+        command === "get_snapshot"
+          ? withTimer({
+              phase: "shortBreak",
+              status: "running",
+              durationSeconds: 300,
+              remainingSeconds: 300,
+            })
+          : undefined,
+      ),
+    );
+    render(<App />);
+    await screen.findByRole("button", { name: "Open settings" });
+
+    fireEvent.keyDown(document.body, { key: "s", ctrlKey: true });
+
+    expect(skips()).toBe(1);
+  });
+
+  it("asks once before discarding a running focus, then skips on the second press", async () => {
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(
+        command === "get_snapshot"
+          ? withTimer({ status: "running", endsAt: Date.now() + 60_000 })
+          : undefined,
+      ),
+    );
+    render(<App />);
+    await screen.findByRole("button", { name: "Open settings" });
+
+    fireEvent.keyDown(document.body, { key: "s", ctrlKey: true });
+    expect(skips()).toBe(0);
+    expect(screen.getByText("Discard session?")).toBeTruthy();
+
+    fireEvent.keyDown(document.body, { key: "s", ctrlKey: true });
+    expect(skips()).toBe(1);
+  });
+
+  it("acts on the press, not on every repeat of a held key", async () => {
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(
+        command === "get_snapshot"
+          ? withTimer({
+              phase: "shortBreak",
+              status: "running",
+              durationSeconds: 300,
+              remainingSeconds: 300,
+            })
+          : undefined,
+      ),
+    );
+    render(<App />);
+    await screen.findByRole("button", { name: "Open settings" });
+
+    fireEvent.keyDown(document.body, { key: "s", ctrlKey: true });
+    for (let repeat = 0; repeat < 20; repeat += 1) {
+      fireEvent.keyDown(document.body, { key: "s", ctrlKey: true, repeat: true });
+    }
+
+    expect(skips()).toBe(1);
+  });
+
+  it("needs the Ctrl key, and leaves a text field alone", async () => {
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === "get_snapshot" ? defaultSnapshot : undefined),
+    );
+    render(<App />);
+    await screen.findByRole("button", { name: "Open settings" });
+
+    fireEvent.keyDown(document.body, { key: "s" });
+    expect(skips()).toBe(0);
+
+    // Ctrl+N opens the task composer with its title field focused.
+    fireEvent.keyDown(document.body, { key: "n", ctrlKey: true });
+    const title = await screen.findByLabelText("Task");
+    fireEvent.keyDown(title, { key: "s", ctrlKey: true });
+    expect(skips()).toBe(0);
+  });
+});
+
 describe("an open dialog", () => {
   it("makes everything behind it inert, so a focused control there cannot be pressed", async () => {
     invoke.mockImplementation((command: string) =>

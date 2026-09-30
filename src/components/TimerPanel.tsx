@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { Pause, Play, RotateCcw, SkipForward } from "lucide-react";
 import type { FocusTask, Phase, TimerFace as TimerFaceId, TimerState } from "../types";
 import { TimerFace } from "./TimerFace";
@@ -19,6 +19,8 @@ interface TimerPanelProps {
   onReset: () => void;
   onSkip: () => void;
   onAddTask: () => void;
+  /** Ctrl+S raises this counter; reacting to it runs the same skip flow as the button. */
+  skipRequest: number;
 }
 
 function TimerPanelComponent({
@@ -31,6 +33,7 @@ function TimerPanelComponent({
   onReset,
   onSkip,
   onAddTask,
+  skipRequest,
 }: TimerPanelProps) {
   const progress =
     timer.durationSeconds > 0
@@ -62,6 +65,17 @@ function TimerPanelComponent({
     setConfirmSkip(false);
     onSkip();
   };
+
+  // Ctrl+S raises this counter. The latest handleSkip goes in a ref so the
+  // effect can depend on just the counter: depending on handleSkip would rerun
+  // it on every confirmSkip change and confirm and skip in the same press.
+  const handleSkipRef = useRef(handleSkip);
+  useEffect(() => {
+    handleSkipRef.current = handleSkip;
+  });
+  useEffect(() => {
+    if (skipRequest > 0) handleSkipRef.current();
+  }, [skipRequest]);
 
   // Said and shown from the same string. The label used to be worked out
   // separately, unclamped and blind to the phase: "Round 5 of 4" was announced
@@ -198,6 +212,8 @@ function TimerPanelComponent({
           <kbd>Space</kbd> {timer.status === "running" ? "pause" : "start"}
           <span aria-hidden="true">·</span>
           <kbd>Ctrl I</kbd> capture a distraction
+          <span aria-hidden="true">·</span>
+          <kbd>Ctrl S</kbd> skip
         </p>
       </div>
     </section>

@@ -42,6 +42,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [addRequest, setAddRequest] = useState(0);
+  const [skipRequest, setSkipRequest] = useState(0);
   const [recoveryDismissed, setRecoveryDismissed] = useState(false);
   const returnFocusRef = useRef<HTMLElement | null>(null);
 
@@ -110,6 +111,9 @@ export default function App() {
     setSidebarOpen(true);
     setAddRequest((count) => count + 1);
   }, []);
+  // Ctrl+S raises this counter, the way Ctrl+N raises the task composer's:
+  // the component that owns the skip flow reacts, confirm step included.
+  const requestSkip = useCallback(() => setSkipRequest((count) => count + 1), []);
   const openCapture = useCallback(() => openDialog(setCaptureOpen), [openDialog]);
   // Until the stored settings have arrived the snapshot holds the defaults, and
   // anything that saves settings would write those defaults over the real ones.
@@ -197,6 +201,7 @@ export default function App() {
     openSettings,
     openAddTask,
     toggleTimer,
+    skipInterval: requestSkip,
     selectPhase,
   });
 
@@ -331,6 +336,7 @@ export default function App() {
             onReset={resetTimer}
             onSkip={skipPhase}
             onAddTask={openAddTask}
+            skipRequest={skipRequest}
           />
           <DayLedger
             dayKey={dayKey}

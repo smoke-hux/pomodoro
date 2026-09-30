@@ -47,6 +47,7 @@ interface KeyboardShortcuts {
   openSettings: () => void;
   openAddTask: () => void;
   toggleTimer: () => void;
+  skipInterval: () => void;
   selectPhase: (phase: Phase) => void;
 }
 
@@ -60,6 +61,7 @@ export function useKeyboardShortcuts({
   openSettings,
   openAddTask,
   toggleTimer,
+  skipInterval,
   selectPhase,
 }: KeyboardShortcuts) {
   useEffect(() => {
@@ -105,6 +107,11 @@ export function useKeyboardShortcuts({
         event.preventDefault();
         const phases: Phase[] = ["focus", "shortBreak", "longBreak"];
         selectPhase(phases[Number(event.key) - 1]);
+      } else if (event.ctrlKey && event.key.toLowerCase() === "s") {
+        // A held key repeats, and each repeat would skip the next interval too.
+        if (event.repeat) return;
+        event.preventDefault();
+        skipInterval();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -119,6 +126,7 @@ export function useKeyboardShortcuts({
     openSettings,
     selectPhase,
     settingsOpen,
+    skipInterval,
     toggleTimer,
   ]);
 }

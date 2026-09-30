@@ -42,6 +42,7 @@ It is a standalone desktop app. There is no account, no cloud, no sync and no ne
 | Ctrl+I                   | Capture an interruption                                                        |
 | Ctrl+N                   | Add a task                                                                     |
 | Ctrl+1 / Ctrl+2 / Ctrl+3 | Choose focus, short break or long break (while idle)                           |
+| Ctrl+S                   | Skip the current interval (asks once before discarding a focus)                |
 | Ctrl+,                   | Open Settings                                                                  |
 | Escape                   | Close whatever is innermost: an open menu, then a dialog, then the task drawer |
 

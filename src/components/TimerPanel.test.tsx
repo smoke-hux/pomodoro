@@ -19,6 +19,7 @@ function cycleCount(timer: Partial<TimerState>) {
       onReset={vi.fn()}
       onSkip={vi.fn()}
       onAddTask={vi.fn()}
+      skipRequest={0}
     />,
   );
   const element = container.querySelector(".cycle-count")!;
