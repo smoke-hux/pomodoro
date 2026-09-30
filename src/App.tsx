@@ -13,7 +13,6 @@ import { applyTheme, nextTheme, resolveTheme, useSystemDark } from "./lib/theme"
 import { browserPreview } from "./lib/browserPreview";
 import { useAppCommands } from "./lib/useAppCommands";
 import { useKeyboardShortcuts } from "./lib/useKeyboardShortcuts";
-import { useCountdown } from "./lib/useCountdown";
 import { useDayKey } from "./lib/useDayKey";
 import { closeRowMenus, useRowMenus } from "./lib/useRowMenus";
 import type { ThemePreference } from "./types";
@@ -45,15 +44,6 @@ export default function App() {
   const [skipRequest, setSkipRequest] = useState(0);
   const [recoveryDismissed, setRecoveryDismissed] = useState(false);
   const returnFocusRef = useRef<HTMLElement | null>(null);
-
-  // The countdown lives here, not in the snapshot. The backend sends a
-  // deadline and this window counts down to it locally; the snapshot only
-  // changes when something other than the clock does.
-  const remainingSeconds = useCountdown(snapshot.timer);
-  const timer = useMemo(
-    () => ({ ...snapshot.timer, remainingSeconds }),
-    [snapshot.timer, remainingSeconds],
-  );
 
   const activeTask = useMemo(
     () => snapshot.tasks.find((task) => task.id === snapshot.timer.activeTaskId) ?? null,
@@ -102,11 +92,6 @@ export default function App() {
     if (settingsLoaded) applyTheme(theme, systemDark);
   }, [settingsLoaded, theme, systemDark]);
 
-  const minutesLeft = Math.ceil(remainingSeconds / 60);
-  useEffect(() => {
-    document.title = `${minutesLeft}m · ${timer.phase === "focus" ? "Focus" : "Break"} · ${timer.status} — Pomodoro`;
-  }, [minutesLeft, timer.phase, timer.status]);
-
   const openAddTask = useCallback(() => {
     setSidebarOpen(true);
     setAddRequest((count) => count + 1);
@@ -150,7 +135,7 @@ export default function App() {
     previewSound,
     clearHistory,
     clearNotifications,
-  } = useAppCommands(inTauri, timer.phase, showNotice, closeSidebar);
+  } = useAppCommands(inTauri, snapshot.timer.phase, showNotice, closeSidebar);
 
   // The toolbar button steps System → Light → Dark and saves at once. It sends
   // the settings as last received, never the settings dialog's unsaved draft.
@@ -210,13 +195,13 @@ export default function App() {
   // nothing but this makes it so.
   const behindModal = captureOpen || settingsOpen;
   const showRecovery = snapshot.recoveredStore !== null && !recoveryDismissed;
-  const shellClass = `app-shell status-${timer.status} phase-${timer.phase}${showRecovery ? " has-banner" : ""}`;
+  const shellClass = `app-shell status-${snapshot.timer.status} phase-${snapshot.timer.phase}${showRecovery ? " has-banner" : ""}`;
   const ThemeIcon = themeIcons[theme];
   const themeTitle =
     theme === "system"
       ? `Theme: System (${resolveTheme(theme, systemDark)} right now)`
       : `Theme: ${themeLabels[theme]}`;
-  const selectionLocked = timer.phase === "focus" && timer.status !== "idle";
+  const selectionLocked = snapshot.timer.phase === "focus" && snapshot.timer.status !== "idle";
 
   if (!ready) {
     return (
@@ -327,7 +312,7 @@ export default function App() {
         )}
         <div className="focus-column">
           <TimerPanel
-            timer={timer}
+            timer={snapshot.timer}
             activeTask={activeTask}
             roundsBeforeLongBreak={snapshot.settings.roundsBeforeLongBreak}
             face={snapshot.settings.timerFace}

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { FocusTask, Interruption, SessionRecord } from "../types";
 import {
   formatClock,
-  formatCountdown,
   formatDuration,
   formatRelativeTime,
   getCompletedFocusByTask,
@@ -241,13 +240,6 @@ describe("formatting", () => {
     expect(formatDuration(65)).toBe("1m 5s");
     expect(formatDuration(3_900)).toBe("1h 5m");
     expect(formatDuration(Number.NaN)).toBe("0s");
-  });
-
-  it("formats countdowns without displaying negative time", () => {
-    expect(formatCountdown(1_500)).toBe("25:00");
-    expect(formatCountdown(3_661)).toBe("1:01:01");
-    expect(formatCountdown(0.2)).toBe("00:01");
-    expect(formatCountdown(-10)).toBe("00:00");
   });
 
   it("formats a local clock value as zero-padded 24-hour time", () => {

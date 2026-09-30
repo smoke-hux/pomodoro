@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { Pause, Play, RotateCcw, SkipForward } from "lucide-react";
 import type { FocusTask, Phase, TimerFace as TimerFaceId, TimerState } from "../types";
+import { useCountdown } from "../lib/useCountdown";
 import { TimerFace } from "./TimerFace";
 
 const phaseLabels: Record<Phase, string> = {
@@ -35,9 +36,20 @@ function TimerPanelComponent({
   onAddTask,
   skipRequest,
 }: TimerPanelProps) {
+  // The countdown lives here, not in the snapshot. The backend sends a
+  // deadline and this panel counts down to it locally; the snapshot only
+  // changes when something other than the clock does. Owning the tick keeps
+  // the once-a-second render inside this memoised panel.
+  const remainingSeconds = useCountdown(timer);
+
+  const minutesLeft = Math.ceil(remainingSeconds / 60);
+  useEffect(() => {
+    document.title = `${minutesLeft}m · ${timer.phase === "focus" ? "Focus" : "Break"} · ${timer.status} — Pomodoro`;
+  }, [minutesLeft, timer.phase, timer.status]);
+
   const progress =
     timer.durationSeconds > 0
-      ? ((timer.durationSeconds - timer.remainingSeconds) / timer.durationSeconds) * 100
+      ? ((timer.durationSeconds - remainingSeconds) / timer.durationSeconds) * 100
       : 0;
   const needsTask = timer.phase === "focus" && !activeTask;
 
@@ -128,7 +140,7 @@ function TimerPanelComponent({
         <TimerFace
           face={face}
           phase={timer.phase}
-          remainingSeconds={timer.remainingSeconds}
+          remainingSeconds={remainingSeconds}
           durationSeconds={timer.durationSeconds}
           phaseLabel={phaseLabels[timer.phase]}
         />
@@ -139,7 +151,7 @@ function TimerPanelComponent({
             aria-label={`${phaseLabels[timer.phase]} progress`}
             aria-valuemin={0}
             aria-valuemax={timer.durationSeconds}
-            aria-valuenow={Math.round(timer.durationSeconds - timer.remainingSeconds)}
+            aria-valuenow={Math.round(timer.durationSeconds - remainingSeconds)}
           >
             <span
               style={{
@@ -194,7 +206,7 @@ function TimerPanelComponent({
             className="secondary-control"
             type="button"
             onClick={onReset}
-            disabled={timer.status === "idle" && timer.remainingSeconds === timer.durationSeconds}
+            disabled={timer.status === "idle" && remainingSeconds === timer.durationSeconds}
             title="Reset this interval"
           >
             <RotateCcw aria-hidden="true" size={17} /> Reset
@@ -221,9 +233,8 @@ function TimerPanelComponent({
 }
 
 /**
- * Memoised: the window re-renders every second while the timer runs, and this
- * component has nothing to do with the countdown. Its props are stable
- * callbacks and slices of the snapshot, so it only re-renders when something
- * it shows actually changed.
+ * Memoised: this panel owns the countdown and the rest of the window does
+ * not. Its other props are stable callbacks and slices of the snapshot, so
+ * the once-a-second tick re-renders nothing outside this panel.
  */
 export const TimerPanel = memo(TimerPanelComponent);
