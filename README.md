@@ -2,7 +2,7 @@
 
 A local-first focus timer for Ubuntu, built on the Pomodoro Technique: work in focused intervals, take a short break after each one, and a longer break after four. It lives in the system tray, keeps a plan and a record of the day, catches the things that interrupt you so you can deal with them afterwards, and tells you — with your desktop's own sound and a notification — when an interval is over.
 
-It is a standalone desktop app. There is no account, no cloud, no sync and no network access at all: everything it knows is in one file in your home directory.
+It is a standalone desktop app. There is no account, no cloud, no sync and no network access at all. Active data lives in one JSON file in your home directory, with local recovery copies for imports and storage upgrades; you can also export it yourself.
 
 ## What it does
 
@@ -20,7 +20,7 @@ It is a standalone desktop app. There is no account, no cloud, no sync and no ne
 
 **Sound and notifications.** When an interval runs out, Pomodoro plays your sound theme's "alarm clock elapsed" sound and shows a notification; when you tick a task off, it plays the theme's short "complete" chime and shows a notification naming the task. Both work with the window closed to the tray. See [Sound and notifications](#sound-and-notifications).
 
-**The tray.** Closing the window hides it; the tray menu shows it again, starts, pauses or resumes the timer — the item says which — skips the current interval, or quits. Only one copy of Pomodoro runs at a time; launching it again brings the existing window forward.
+**The tray.** On a desktop with an active AppIndicator tray host, closing the window hides it; the tray menu shows it again, starts, pauses or resumes the timer — the item says which — skips the current interval, or quits. If the tray is unavailable, closing exits safely, pauses the timer and restores desktop banners. Only one copy of Pomodoro runs at a time; launching it again shows the existing window.
 
 **Light and dark.** Follows the desktop's appearance setting live, or stays on the theme you pick, from the toolbar button or Settings → Appearance. Keyboard navigation throughout, high-contrast and reduced-motion support.
 
@@ -80,7 +80,7 @@ What it does and does not do:
 - It **does not hide the banner**. Watching a notification cannot stop it. Banners still appear and sounds still play.
 - **Silence banners during focus** is the setting that actually quiets the desktop. It switches GNOME's own Do Not Disturb on for the length of each focus interval and switches it back at the end. It is a separate, off-by-default toggle because it changes a setting that belongs to the desktop rather than to Pomodoro. Banners you had already turned off yourself are left alone, quitting from the tray puts the setting back, and if Pomodoro is killed mid-interval the next launch repairs it.
 
-You choose what is worth keeping: a minimum urgency, whether to capture only during focus, a list of muted apps, and a list of priority apps that bypass the other rules. Pomodoro never captures its own notifications. A notification a sender updates in place — a download counting up, a call still ringing — stays one row in the inbox rather than one per update.
+You choose what is worth keeping: a minimum urgency, whether to capture only during focus, a list of muted apps, and a list of priority apps that bypass the urgency and focus-only rules. Muted apps are always excluded, even if they also appear in the priority list. Pomodoro never captures its own notifications. A notification a sender updates in place — a download counting up, a call still ringing — stays one row in the inbox rather than one per update. The inbox keeps the newest 200 notifications.
 
 The inbox shows each captured notification with its app, urgency, time and whether it arrived during focus. Each can be marked triaged (or moved back to pending), turned into a task, or deleted. Deleting removes the copy from the active data file; a task already made from it stays. Previously created backups and exports may still contain the text; use Settings → Backup and transfer → Open data folder to manage recovery copies.
 
@@ -128,7 +128,7 @@ From then on `sudo apt upgrade` brings new versions with the rest of the system.
     sudo apt remove pomodoro
     sudo rm /etc/apt/sources.list.d/pomodoro.list /etc/apt/keyrings/pomodoro.gpg
 
-This is a third-party repository, not part of Ubuntu itself: `apt install pomodoro` works only after the two commands above. The name is free — Ubuntu ships the unrelated `gnome-shell-pomodoro`, and nothing else in the archive is called `pomodoro`.
+This is a third-party repository, not part of Ubuntu itself: `apt install pomodoro` works only after adding the repository above. The name is free — Ubuntu ships the unrelated `gnome-shell-pomodoro`, and nothing else in the archive is called `pomodoro`.
 
 ### From a single package
 
@@ -140,6 +140,7 @@ Or, without administrator rights, install it for your user alone. The package's 
 
     dpkg-deb -x pomodoro_0.1.0_amd64.deb /tmp/pomodoro-pkg
     install -Dm755 /tmp/pomodoro-pkg/usr/bin/pomodoro ~/.local/bin/pomodoro
+    mkdir -p ~/.local/share/applications
     cp -r /tmp/pomodoro-pkg/usr/share/icons ~/.local/share/
     sed "s|^Exec=pomodoro$|Exec=$HOME/.local/bin/pomodoro|" \
         /tmp/pomodoro-pkg/usr/share/applications/Pomodoro.desktop \
@@ -149,9 +150,11 @@ Or, without administrator rights, install it for your user alone. The package's 
 
 To remove a per-user install, delete those files. Do not keep both kinds of install at once.
 
-Open Pomodoro from the application launcher. Closing the window hides it in the system tray so an active timer can continue; choose Quit from the tray menu to exit completely.
+Open Pomodoro from the application launcher. With an active tray host, closing the window hides it so an active timer can continue; choose Quit from the tray menu to exit completely. Without a tray host, closing exits and saves the timer as paused, so the app cannot become inaccessible in the background.
 
-Released packages are built on Ubuntu 22.04 x86_64, which is the oldest release they are meant for; they install on 22.04 and anything newer. A package you build yourself carries the compatibility of whatever release you build it on.
+Ubuntu 26.04 LTS with GNOME 50 and Wayland is the current desktop target. Ubuntu 24.04 remains in the automated test matrix. Released packages keep Ubuntu 22.04 x86_64 as their build baseline, inside a container on a current runner; package installation and shared-library resolution are checked on 24.04 and 26.04 before publication. A package you build yourself carries the compatibility of whatever release you build it on.
+
+GTK and WebKit select the display backend automatically. Keep that default on Wayland; forcing X11 is only needed for the headless Xvfb smoke test. GNOME needs an AppIndicator extension for tray icons. When its host, the tray library or the optional `gdbus` tool is unavailable, the timer still opens and close uses the safe exit behavior above. Screen locking, suspend/resume, fractional scaling and desktop integrations should be checked in a real GNOME session before a release; headless CI does not establish those behaviors.
 
 ## Local data
 
@@ -171,7 +174,7 @@ Settings → Backup and transfer has four actions:
 
 - **Export data** saves all tasks, settings, interruptions, captured notifications and retained session history to a JSON file chosen in a native file dialog. A running timer is saved as paused in the export. The current timer keeps running.
 - **Export CSV** saves every retained session record, not just the recent history shown in the window. Dates use UTC; task text is quoted and formula-like values are escaped for spreadsheet use.
-- **Choose import** reads and validates a JSON file, then shows its name and record counts. Nothing is replaced until you tick the confirmation and choose **Import and replace**. Reset a running or paused interval before importing. Imported timers stay paused; notification capture and desktop Do Not Disturb are switched off until you enable them on this machine. Imported settings replace saved settings, and the settings dialog closes after success.
+- **Choose import** reads and validates a JSON file, then shows its name and record counts. Nothing is replaced until you tick the confirmation and choose **Import and replace**. Reset a running or paused interval before importing. A running timer in the chosen file is paused with the time left at preview; waiting to confirm adds no time. Notification capture and desktop Do Not Disturb are switched off until you enable them on this machine. Settings stays open while a transfer is in progress and closes after a successful import, which replaces saved settings.
 - **Open data folder** opens the folder containing `pomodoro.json` and its `backups/` subfolder.
 
 Before import, a storage-format upgrade or clearing session history, Pomodoro saves a recovery copy. It keeps five copies in `backups/`, with the same owner-only permissions as the main store. Import refuses to replace data if the recovery copy or replacement cannot be written. These backups live on the same disk: export a copy to another location for protection against disk loss.
@@ -182,7 +185,7 @@ JSON imports are limited to 32 MiB, 5,000 sessions and 200 captured notification
 
 ### Storage versions
 
-The current disk format is `schemaVersion: 1`. Existing unversioned stores load as version 0 and migrate on their next successful save, with their original bytes backed up first. A newer schema encountered by an older application stays at its original path and is protected from writes; use a newer build to open it. Corrupt files still use the recovery behavior described above.
+The current disk format is `schemaVersion: 1`. Existing unversioned stores load as version 0 and migrate on their next successful save, with their original bytes backed up first. If that backup fails, the original stays unchanged and current changes remain unsaved. Pomodoro reports the failure and retries; restore write access to the data folder and its `backups/` folder so it can save. A newer schema encountered by an older application stays at its original path and is protected from writes; use a newer build to open it. Corrupt files still use the recovery behavior described above.
 
 ### Upgrading from the Kipindi build
 
@@ -198,34 +201,38 @@ The old directory is left in place. Remove it once the new build has started cle
 
 Pomodoro is a [Tauri 2](https://tauri.app) application: a Rust backend (`src-tauri/`) that owns the timer, the store, the tray, notification capture and sound, and a React front end (`src/`) that draws it. The window counts the timer down locally from a deadline the backend gives it; the backend only speaks when something other than the clock changes.
 
-Required Ubuntu packages:
+Use the shared prerequisite script on Ubuntu 22.04, 24.04 or 26.04. It prints the package commands by default; installation is explicit:
 
-    sudo apt install libwebkit2gtk-4.1-dev build-essential file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+    bash scripts/setup-linux.sh --print
+    bash scripts/setup-linux.sh --install
 
-Use Node.js 22.14 or newer (`.nvmrc` selects Node 22) and stable Rust. Install the locked project dependencies and run the checks:
+The script installs the GTK 3, WebKitGTK 4.1, AppIndicator and build prerequisites used by CI. Node.js and Rust are installed separately. For desktop smoke testing, add `--desktop`; it selects `webkitgtk-webdriver` on Ubuntu 26.04 and `webkit2gtk-driver` on older LTS releases. See [Testing](docs/testing.md) for the complete setup.
+
+Use Node.js 22.14 or newer (`.nvmrc` selects Node 22) and stable Rust. From the repository root, install the locked project dependencies and run the checks:
 
     npm ci
     npm run check
-    cd src-tauri
-    cargo fmt --all --check
-    cargo clippy --all-targets -- -D warnings
-    cargo test
+    cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
+    cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+    cargo test --manifest-path src-tauri/Cargo.toml
 
-`npm run check` runs linting, formatting, dependency-license checks, the TypeScript/production build and frontend tests. Use `npm run format` and `cargo fmt` to apply formatting. CI also runs a real desktop smoke test in an isolated XDG directory and D-Bus session; see [Testing](docs/testing.md) for the required drivers and commands.
+`npm run check` runs linting, formatting, dependency-license checks, the TypeScript/production build and frontend tests. Build the frontend before running the Rust checks: Tauri's build script needs `dist/`. Use `npm run format` and `cargo fmt --manifest-path src-tauri/Cargo.toml` to apply formatting. Use `npm run test:watch` while working on frontend tests. CI also runs a real desktop smoke test in an isolated XDG directory and D-Bus session; see [Testing](docs/testing.md) for the required drivers and commands.
 
 See [Contributing](CONTRIBUTING.md) for supported environments and review expectations, [Security](SECURITY.md) for private vulnerability reporting, and [Architecture](docs/architecture.md) for module responsibilities. Weekly dependency updates, advisory/license checks and CodeQL workflows are included; GitHub code-scanning results require the repository feature to be enabled.
 
-No test plays a sound or sends a real notification. Some checks need a real GNOME session — a session bus, a notification daemon, and `gsettings` — so they are marked `#[ignore]` and skipped by CI. Run them on an Ubuntu desktop, from `src-tauri`:
+The normal test suites use fixtures and do not play sounds, send real notifications or change desktop settings. Live desktop checks are marked `#[ignore]` and skipped by CI. They need a real GNOME session with a session bus, a notification daemon, `notify-send` and `gsettings`; they send real notifications and temporarily change the banner setting. Run them only in a dedicated Ubuntu desktop test session:
 
-    cargo test -- --ignored --nocapture
+    cargo test --manifest-path src-tauri/Cargo.toml -- --ignored --nocapture --test-threads=1
 
-They cover capture against the live bus, a notification arriving mid-focus being filed without disturbing the timer, Pomodoro's own alerts staying out of the inbox, banners being silenced and restored, and carrying a real `app.kipindi.timer` store across. None of them write to your live Pomodoro data or leave the desktop's banner setting changed.
+They cover capture against the live bus, a notification arriving mid-focus being filed without disturbing the timer, Pomodoro's own alerts staying out of the inbox, banners being silenced and restored, and carrying a real `app.kipindi.timer` store across. The migration check reads an existing legacy store and writes its result to a temporary directory. These checks do not write to your live Pomodoro data; the banner check restores its original setting after the test.
 
 Run the desktop app in development:
 
     npm run tauri dev
 
-Opening `npm run dev` in a browser shows the interface with sample data and no backend. The theme button works there; everything that saves does not.
+Run `npm run dev` and open `http://127.0.0.1:1420` in a browser to see the interface with sample data and no backend. The theme button works there; native commands and saving require the desktop app.
+
+While the redesign is being reviewed, `http://127.0.0.1:1420/?design_lab=true` opens five interactive design alternatives with shared sample data and a feedback overlay. The selected timer-first design is integrated with the real components at `http://127.0.0.1:1420/?design_preview=true`, with a before/after switch. These temporary previews are available only in development; their code is excluded from production builds. The selected layout will become the default after final review.
 
 `public/theme-init.js` is the one script outside the bundle. It applies the remembered theme before the first paint, and it is a file rather than an inline script because the content security policy only allows the app's own scripts.
 
@@ -235,7 +242,7 @@ Build a Debian package:
 
 ## Releasing
 
-A release is a tag. Pushing `v0.1.1` builds the package on Ubuntu 22.04, attaches it to a GitHub release, and rebuilds the apt repository from the packages of every release so far, so an older version stays installable while people upgrade. The workflow is `.github/workflows/release.yml`; it refuses to build if the tag and the two version fields disagree.
+A release is a tag. Pushing `v0.1.1` builds the package on Ubuntu 22.04, attaches it to a GitHub release, and rebuilds the apt repository from the packages of every release so far, so an older version stays installable while people upgrade. The workflow is `.github/workflows/release.yml`; it refuses to build unless the tag agrees with the version in `package.json`, `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml`.
 
     # set the same version in package.json, src-tauri/tauri.conf.json
     # and src-tauri/Cargo.toml first

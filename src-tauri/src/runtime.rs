@@ -635,7 +635,11 @@ pub(crate) fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Erro
         }
     }
     app.manage(state);
-    build_tray(app)?;
+    // GNOME can run without an AppIndicator host. A missing tray must not
+    // prevent the timer from starting; close then follows normal window exit.
+    if let Err(error) = build_tray(app) {
+        eprintln!("system tray unavailable; closing the window will quit Pomodoro: {error}");
+    }
 
     let handle = app.handle().clone();
     sync_listener(&handle, &handle.state::<RuntimeState>(), capture_enabled);

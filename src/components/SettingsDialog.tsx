@@ -37,6 +37,8 @@ interface SettingsDialogProps {
   captureStatus: CaptureStatus;
   notificationCount: number;
   onClose: () => void;
+  /** Keeps parent close routes, including Escape, locked during data transfer. */
+  onBusyChange?: (busy: boolean) => void;
   /** Resolves to whether the settings were saved. A refused save keeps the dialog and the edits. */
   onSave: (settings: Settings) => Promise<boolean>;
   /** Plays the interval-finished sound once, so it can be heard before relying on it. Resolves when it has played or failed. */
@@ -249,6 +251,7 @@ function SettingsDialogComponent({
   captureStatus,
   notificationCount,
   onClose,
+  onBusyChange,
   onSave,
   onPreviewSound,
   onClearHistory,
@@ -259,6 +262,7 @@ function SettingsDialogComponent({
   const [confirmClearNotifications, setConfirmClearNotifications] = useState(false);
   const [saving, setSaving] = useState(false);
   const [dataBusy, setDataBusy] = useState(false);
+  const dataBusyRef = useRef(false);
   const [previewing, setPreviewing] = useState(false);
   const dialogRef = useRef<HTMLElement>(null);
   useModalFocus(open, dialogRef);
@@ -280,6 +284,14 @@ function SettingsDialogComponent({
 
   if (!open) return null;
 
+  const close = () => {
+    if (!dataBusyRef.current) onClose();
+  };
+  const changeDataBusy = (busy: boolean) => {
+    dataBusyRef.current = busy;
+    setDataBusy(busy);
+    onBusyChange?.(busy);
+  };
   const filter = draft.notificationFilter;
   const setFilter = (patch: Partial<NotificationFilter>) =>
     setDraft({ ...draft, notificationFilter: { ...filter, ...patch } });
@@ -293,7 +305,7 @@ function SettingsDialogComponent({
       className="dialog-backdrop"
       role="presentation"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (event.target === event.currentTarget) close();
       }}
     >
       <section
@@ -308,7 +320,8 @@ function SettingsDialogComponent({
           <button
             className="icon-button"
             type="button"
-            onClick={onClose}
+            onClick={close}
+            disabled={dataBusy}
             aria-label="Close settings"
           >
             <X aria-hidden="true" size={19} />
@@ -317,13 +330,13 @@ function SettingsDialogComponent({
         <form
           onSubmit={(event) => {
             event.preventDefault();
-            if (saving || dataBusy) return;
+            if (saving || dataBusyRef.current) return;
             setSaving(true);
             // Only a save that happened closes the dialog. Closing on a refused
             // one discarded every edit along with the error that explained why.
             void onSave(draft).then((saved) => {
               setSaving(false);
-              if (saved) onClose();
+              if (saved) close();
             });
           }}
         >
@@ -588,7 +601,7 @@ function SettingsDialogComponent({
               </div>
             </fieldset>
 
-            <DataSettings onImported={onClose} onBusyChange={setDataBusy} />
+            <DataSettings onImported={close} onBusyChange={changeDataBusy} />
 
             <fieldset>
               <legend>Data</legend>
@@ -689,6 +702,12 @@ function SettingsDialogComponent({
                 </div>
                 <div>
                   <dt>
+                    <kbd>Ctrl S</kbd>
+                  </dt>
+                  <dd>Skip interval</dd>
+                </div>
+                <div>
+                  <dt>
                     <kbd>Ctrl 1–3</kbd>
                   </dt>
                   <dd>Choose timer mode</dd>
@@ -703,7 +722,7 @@ function SettingsDialogComponent({
             </fieldset>
           </div>
           <div className="dialog-actions settings-actions">
-            <button className="text-button" type="button" onClick={onClose}>
+            <button className="text-button" type="button" onClick={close} disabled={dataBusy}>
               Cancel
             </button>
             <button className="small-primary" type="submit" disabled={dataBusy}>

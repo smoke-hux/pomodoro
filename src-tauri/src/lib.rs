@@ -26,13 +26,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(data_transfer::TransferState::default())
+        .manage(tray::WindowCloseState::default())
         .setup(runtime::setup)
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
-            }
-        })
+        .on_window_event(tray::handle_window_event)
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
             commands::toggle_timer,

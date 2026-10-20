@@ -106,7 +106,7 @@ pub(crate) fn preview_import(
     file.take(schema::MAX_IMPORT_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| format!("Could not read the chosen file: {error}"))?;
-    let data = schema::import(&bytes)?;
+    let data = schema::import(&bytes, now_ms())?;
     let token = uuid::Uuid::new_v4().to_string();
     let preview = ImportPreview {
         token: token.clone(),
@@ -364,6 +364,27 @@ mod tests {
     }
 
     #[test]
+    fn confirming_a_prepared_import_keeps_the_remaining_time_frozen_at_preview() {
+        let directory =
+            std::env::temp_dir().join(format!("pomodoro-import-{}", uuid::Uuid::new_v4()));
+        let store = Store::new(&directory);
+        let mut source = AppData::default();
+        source.timer.duration_seconds = 120;
+        source.timer.remaining_seconds = 120;
+        source.start_or_resume(1_000);
+        let imported = schema::import(&schema::encode(&source).unwrap(), 61_001).unwrap();
+        let mut current = AppData::default();
+
+        replace(&store, &mut current, &imported, 150_000).unwrap();
+
+        assert_eq!(current.timer.status, TimerStatus::Paused);
+        assert_eq!(current.timer.remaining_seconds, 60);
+        assert_eq!(current.timer.ends_at, None);
+        assert_eq!(store.load().unwrap().timer, current.timer);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn csv_escapes_text_and_neutralizes_spreadsheet_formulas() {
         assert_eq!(csv_cell("A,\"B\"\nC"), "\"A,\"\"B\"\"\nC\"");
         assert_eq!(csv_cell("=1+1"), "\"'=1+1\"");
@@ -382,7 +403,7 @@ mod tests {
         let mut data = AppData::default();
         data.create_task("Portable work", 1, 0);
         let exported = export_bytes(&data).unwrap();
-        assert_eq!(schema::import(&exported).unwrap().tasks, data.tasks);
+        assert_eq!(schema::import(&exported, 100).unwrap().tasks, data.tasks);
 
         data.tasks[0].title = "x".repeat(schema::MAX_IMPORT_BYTES as usize);
         assert!(export_bytes(&data).unwrap_err().contains("32 MiB"));

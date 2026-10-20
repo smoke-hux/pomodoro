@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import type { ImportPreview } from "../types";
-import "../styles/data-transfer.css";
 
 export function DataSettings({
   onImported,
@@ -16,6 +15,7 @@ export function DataSettings({
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const mounted = useRef(true);
+  const running = useRef(false);
   const pending = useRef<string | null>(null);
   const previewHeading = useRef<HTMLHeadingElement>(null);
   const desktop = "__TAURI_INTERNALS__" in window;
@@ -24,7 +24,9 @@ export function DataSettings({
     mounted.current = true;
     return () => {
       mounted.current = false;
-      if (pending.current) void api.cancelImport(pending.current).catch(() => {});
+      const token = pending.current;
+      pending.current = null;
+      if (token) void api.cancelImport(token).catch(() => {});
     };
   }, []);
 
@@ -32,23 +34,32 @@ export function DataSettings({
     if (preview) previewHeading.current?.focus();
   }, [preview]);
 
-  async function run(action: () => Promise<void>) {
-    if (busy) return;
+  async function run(action: () => Promise<void>, onSuccess?: () => void) {
+    if (running.current) return;
+    running.current = true;
     setBusy(true);
     onBusyChange?.(true);
     setError("");
     setStatus("");
+    let succeeded = false;
     try {
       await action();
+      succeeded = true;
     } catch (reason) {
       if (mounted.current) setError(String(reason));
     } finally {
+      running.current = false;
       onBusyChange?.(false);
       if (mounted.current) setBusy(false);
     }
+    if (succeeded && mounted.current) onSuccess?.();
   }
 
   async function chooseImport() {
+    // Reopening the picker invalidates its previous preview, including when
+    // the replacement picker is cancelled or its chosen file cannot be read.
+    await cancelImport();
+    if (!mounted.current) return;
     const next = await api.previewImport();
     if (!mounted.current) {
       if (next) await api.cancelImport(next.token);
@@ -60,10 +71,31 @@ export function DataSettings({
   }
 
   async function cancelImport() {
-    if (pending.current) await api.cancelImport(pending.current);
+    const token = pending.current;
     pending.current = null;
-    setPreview(null);
-    setConfirmed(false);
+    try {
+      if (token) await api.cancelImport(token);
+    } catch (reason) {
+      if (mounted.current) pending.current = token;
+      throw reason;
+    }
+    if (mounted.current) {
+      setPreview(null);
+      setConfirmed(false);
+    }
+  }
+
+  async function confirmImport(token: string) {
+    // Confirmation owns this token until the command settles. Unmount cleanup
+    // must not race it by cancelling an import that is already in progress.
+    pending.current = null;
+    try {
+      await api.confirmImport(token);
+    } catch (reason) {
+      if (mounted.current) pending.current = token;
+      else await api.cancelImport(token).catch(() => {});
+      throw reason;
+    }
   }
 
   return (
@@ -151,13 +183,7 @@ export function DataSettings({
               type="button"
               className="danger-button"
               disabled={!confirmed}
-              onClick={() =>
-                void run(async () => {
-                  await api.confirmImport(preview.token);
-                  pending.current = null;
-                  if (mounted.current) onImported();
-                })
-              }
+              onClick={() => void run(() => confirmImport(preview.token), onImported)}
             >
               Import and replace
             </button>

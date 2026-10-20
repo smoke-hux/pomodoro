@@ -50,8 +50,9 @@ export function useAppSnapshot(
         stop = undefined;
         setReady(true);
         showNotice("Pomodoro could not connect to its local data. Retrying…");
-        // A failed subscription must not silently turn the window into a
-        // frozen snapshot. Retry both registration and the initial read.
+        // Keep retrying while mounted so a temporary backend failure can
+        // recover without a restart. Each retry refreshes the notice. Only a
+        // successful read or broadcast makes stored settings safe to edit.
         retry = window.setTimeout(() => void connect(), RETRY_DELAY_MS);
       }
     }

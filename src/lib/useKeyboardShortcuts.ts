@@ -38,6 +38,7 @@ export function activatesOnSpace(target: EventTarget | null) {
 }
 
 interface KeyboardShortcuts {
+  enabled: boolean;
   captureOpen: boolean;
   settingsOpen: boolean;
   closeCapture: () => void;
@@ -52,6 +53,7 @@ interface KeyboardShortcuts {
 }
 
 export function useKeyboardShortcuts({
+  enabled,
   captureOpen,
   settingsOpen,
   closeCapture,
@@ -80,6 +82,9 @@ export function useKeyboardShortcuts({
         else closeSidebar();
         return;
       }
+      // Dismissal must work even after a failed initial connection. Actions
+      // wait for real data so they cannot use placeholders or queue a skip.
+      if (!enabled) return;
       // A modal owns the keyboard while it is open. Without this guard the
       // window-level handler still fires underneath it, so Space on a dialog
       // button would both press the button and toggle the timer behind it.
@@ -108,9 +113,11 @@ export function useKeyboardShortcuts({
         const phases: Phase[] = ["focus", "shortBreak", "longBreak"];
         selectPhase(phases[Number(event.key) - 1]);
       } else if (event.ctrlKey && event.key.toLowerCase() === "s") {
+        event.preventDefault();
         // A held key repeats, and each repeat would skip the next interval too.
         if (event.repeat) return;
-        event.preventDefault();
+        // The row menu owns the current interaction until it is dismissed.
+        if (document.querySelector("details.row-menu[open]")) return;
         skipInterval();
       }
     };
@@ -121,6 +128,7 @@ export function useKeyboardShortcuts({
     closeCapture,
     closeSettings,
     closeSidebar,
+    enabled,
     openAddTask,
     openCapture,
     openSettings,

@@ -85,8 +85,11 @@ function TimerPanelComponent({
   useEffect(() => {
     handleSkipRef.current = handleSkip;
   });
+  const lastSkipRequest = useRef(skipRequest);
   useEffect(() => {
-    if (skipRequest > 0) handleSkipRef.current();
+    if (skipRequest === lastSkipRequest.current) return;
+    lastSkipRequest.current = skipRequest;
+    handleSkipRef.current();
   }, [skipRequest]);
 
   // Said and shown from the same string. The label used to be worked out

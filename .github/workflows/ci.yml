@@ -19,7 +19,7 @@ env:
 jobs:
   web:
     name: Frontend
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
@@ -45,24 +45,19 @@ jobs:
         run: npm test
 
   rust:
-    name: Backend
-    runs-on: ubuntu-24.04
+    name: Backend (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # Tauri links against the system WebKit and GTK stack even for a plain
       # `cargo test`, because the build script compiles the app's context.
       - name: Install Tauri system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y \
-            libwebkit2gtk-4.1-dev \
-            libjavascriptcoregtk-4.1-dev \
-            libsoup-3.0-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf
+        run: bash scripts/setup-linux.sh --install
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
@@ -76,6 +71,7 @@ jobs:
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           workspaces: src-tauri
+          key: ${{ matrix.os }}
 
       # tauri.conf.json points at ../dist, and the build script fails without
       # it, so the frontend is built before anything touches cargo.
@@ -88,27 +84,26 @@ jobs:
 
       - name: Clippy
         working-directory: src-tauri
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
 
       # The live D-Bus test is #[ignore]d: a CI runner has no session bus or
       # notification daemon.
       - name: Test
         working-directory: src-tauri
-        run: cargo test
+        run: cargo test --locked
 
   desktop:
-    name: Desktop smoke test
-    runs-on: ubuntu-24.04
+    name: Desktop smoke test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Install desktop and WebDriver dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y \
-            libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev \
-            libsoup-3.0-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev patchelf webkit2gtk-driver xvfb xauth dbus-x11
+        run: bash scripts/setup-linux.sh --install --desktop
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
@@ -117,6 +112,7 @@ jobs:
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           workspaces: src-tauri
+          key: ${{ matrix.os }}
       - run: npm ci
       - name: Install Tauri WebDriver
         run: cargo install tauri-driver --locked --version 2.0.6
@@ -125,12 +121,14 @@ jobs:
       - name: Exercise the desktop app with an isolated data directory and session bus
         env:
           POMODORO_TEST_ARTIFACTS: test-artifacts/desktop
+          # This job uses Xvfb; native Wayland is covered in the release checklist.
+          GDK_BACKEND: x11
         run: xvfb-run -a npm run test:desktop
       - name: Save desktop screenshots
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: desktop-smoke-screenshots
+          name: desktop-smoke-screenshots-${{ matrix.os }}
           path: test-artifacts/desktop
           if-no-files-found: ignore
           retention-days: 7

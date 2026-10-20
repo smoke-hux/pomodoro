@@ -5,7 +5,9 @@
 @import "./styles/timer.css";
 @import "./styles/ledger.css";
 @import "./styles/dialogs.css";
+@import "./styles/data-transfer.css";
 @import "./styles/responsive.css";
 @import "./styles/states.css";
 @import "./styles/notifications.css";
 @import "./styles/timer-faces.css";
+@import "./styles/timer-first.css";

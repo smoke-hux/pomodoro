@@ -229,7 +229,7 @@ async function smoke() {
   required(
     nativeDriver ?? "WebKitWebDriver",
     ["--help"],
-    "Install the webkit2gtk-driver OS package.",
+    "Install webkitgtk-webdriver on Ubuntu 26.04, or webkit2gtk-driver on Ubuntu 22.04/24.04; bash scripts/setup-linux.sh --install --desktop selects the matching package.",
   );
   required("dbus-run-session", ["--version"], "Install the dbus-daemon OS package.");
   assert.ok(process.env.DISPLAY, "Run under a virtual display: xvfb-run -a npm run test:desktop");

@@ -208,19 +208,7 @@
 
 @media (max-height: 619px) {
   .focus-column {
-    grid-template-rows: minmax(0, 1fr) 48px;
-  }
-
-  .ledger details > :not(summary) {
-    display: none !important;
-  }
-
-  .ledger summary {
-    border-bottom: 0;
-  }
-
-  .ledger-chevron {
-    display: none;
+    grid-template-rows: minmax(0, 1fr) minmax(124px, 28%);
   }
 
   .timer-stage {

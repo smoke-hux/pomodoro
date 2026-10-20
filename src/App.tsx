@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Clock3, Inbox, Menu, Monitor, Moon, Settings as SettingsIcon, Sun } from "lucide-react";
 import { api } from "./lib/api";
 import { useAppSnapshot } from "./lib/useAppSnapshot";
@@ -29,7 +29,14 @@ const themeLabels: Record<ThemePreference, string> = {
 };
 const themeIcons = { system: Monitor, light: Sun, dark: Moon };
 
-export default function App() {
+// The temporary design lab is available only during development. Release
+// builds remove this import and always launch the real desktop workspace.
+const DesignLab = import.meta.env.DEV ? lazy(() => import("../.claude-design/lab/page")) : null;
+const DesignPreview = import.meta.env.DEV
+  ? lazy(() => import("../.claude-design/preview/page"))
+  : null;
+
+export function PomodoroWorkspace({ layout = "legacy" }: { layout?: "legacy" | "timer-first" }) {
   const inTauri = "__TAURI_INTERNALS__" in window;
   const { notice, showNotice } = useNotice();
   const { snapshot, setSnapshot, ready, settingsLoaded } = useAppSnapshot(
@@ -44,6 +51,10 @@ export default function App() {
   const [skipRequest, setSkipRequest] = useState(0);
   const [recoveryDismissed, setRecoveryDismissed] = useState(false);
   const returnFocusRef = useRef<HTMLElement | null>(null);
+  const settingsBusy = useRef(false);
+  const setSettingsBusy = useCallback((busy: boolean) => {
+    settingsBusy.current = busy;
+  }, []);
 
   const activeTask = useMemo(
     () => snapshot.tasks.find((task) => task.id === snapshot.timer.activeTaskId) ?? null,
@@ -110,7 +121,9 @@ export default function App() {
     openDialog(setSettingsOpen);
   }, [openDialog, settingsLoaded, showNotice]);
   const closeCapture = useCallback(() => closeDialog(setCaptureOpen), [closeDialog]);
-  const closeSettings = useCallback(() => closeDialog(setSettingsOpen), [closeDialog]);
+  const closeSettings = useCallback(() => {
+    if (!settingsBusy.current) closeDialog(setSettingsOpen);
+  }, [closeDialog]);
 
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
   const {
@@ -177,6 +190,7 @@ export default function App() {
   useRowMenus();
 
   useKeyboardShortcuts({
+    enabled: settingsLoaded,
     captureOpen,
     settingsOpen,
     closeCapture,
@@ -195,7 +209,7 @@ export default function App() {
   // nothing but this makes it so.
   const behindModal = captureOpen || settingsOpen;
   const showRecovery = snapshot.recoveredStore !== null && !recoveryDismissed;
-  const shellClass = `app-shell status-${snapshot.timer.status} phase-${snapshot.timer.phase}${showRecovery ? " has-banner" : ""}`;
+  const shellClass = `app-shell status-${snapshot.timer.status} phase-${snapshot.timer.phase}${showRecovery ? " has-banner" : ""}${layout === "timer-first" ? " layout-timer-first" : ""}`;
   const ThemeIcon = themeIcons[theme];
   const themeTitle =
     theme === "system"
@@ -212,18 +226,72 @@ export default function App() {
     );
   }
 
+  const tasksPanel = (
+    <div className={`sidebar-wrap ${sidebarOpen ? "open" : ""}`}>
+      <TaskSidebar
+        tasks={snapshot.tasks}
+        interruptions={snapshot.interruptions}
+        notifications={snapshot.notifications}
+        captureEnabled={snapshot.settings.notificationFilter.enabled}
+        captureStatus={snapshot.captureStatus}
+        activeTaskId={snapshot.timer.activeTaskId}
+        addRequest={addRequest}
+        selectionLocked={selectionLocked}
+        onSelectTask={selectTask}
+        dayKey={dayKey}
+        onAddTask={addTask}
+        onUpdateTask={updateTask}
+        onToggleTask={toggleTask}
+        onDeleteTask={deleteTask}
+        onOpenCapture={openCapture}
+        onHandleInterruption={handleInterruption}
+        onConvertInterruption={convertInterruption}
+        onDeleteInterruption={deleteInterruption}
+        onTriageNotification={triageNotification}
+        onConvertNotification={convertNotification}
+        onDeleteNotification={deleteNotification}
+        onOpenSettings={openSettings}
+      />
+    </div>
+  );
+  const timerPanel = (
+    <TimerPanel
+      timer={snapshot.timer}
+      activeTask={activeTask}
+      roundsBeforeLongBreak={snapshot.settings.roundsBeforeLongBreak}
+      face={snapshot.settings.timerFace}
+      onSetPhase={selectPhase}
+      onToggleTimer={toggleTimer}
+      onReset={resetTimer}
+      onSkip={skipPhase}
+      onAddTask={openAddTask}
+      skipRequest={skipRequest}
+    />
+  );
+  const ledger = (
+    <DayLedger
+      dayKey={dayKey}
+      sessions={snapshot.sessions}
+      tasks={snapshot.tasks}
+      interruptions={snapshot.interruptions}
+      defaultExpanded={layout === "legacy"}
+    />
+  );
+
   return (
     <main className={shellClass}>
       <header className="app-toolbar" inert={behindModal}>
-        <button
-          className="icon-button mobile-only"
-          type="button"
-          onClick={() => setSidebarOpen((open) => !open)}
-          aria-label="Toggle tasks"
-          aria-expanded={sidebarOpen}
-        >
-          <Menu aria-hidden="true" size={19} />
-        </button>
+        {layout === "legacy" && (
+          <button
+            className="icon-button mobile-only"
+            type="button"
+            onClick={() => setSidebarOpen((open) => !open)}
+            aria-label="Toggle tasks"
+            aria-expanded={sidebarOpen}
+          >
+            <Menu aria-hidden="true" size={19} />
+          </button>
+        )}
         <div className="brand-mark" aria-hidden="true">
           <Clock3 size={18} />
         </div>
@@ -276,60 +344,29 @@ export default function App() {
       )}
 
       <div className="workspace" inert={behindModal}>
-        <div className={`sidebar-wrap ${sidebarOpen ? "open" : ""}`}>
-          <TaskSidebar
-            tasks={snapshot.tasks}
-            interruptions={snapshot.interruptions}
-            notifications={snapshot.notifications}
-            captureEnabled={snapshot.settings.notificationFilter.enabled}
-            captureStatus={snapshot.captureStatus}
-            activeTaskId={snapshot.timer.activeTaskId}
-            addRequest={addRequest}
-            selectionLocked={selectionLocked}
-            onSelectTask={selectTask}
-            dayKey={dayKey}
-            onAddTask={addTask}
-            onUpdateTask={updateTask}
-            onToggleTask={toggleTask}
-            onDeleteTask={deleteTask}
-            onOpenCapture={openCapture}
-            onHandleInterruption={handleInterruption}
-            onConvertInterruption={convertInterruption}
-            onDeleteInterruption={deleteInterruption}
-            onTriageNotification={triageNotification}
-            onConvertNotification={convertNotification}
-            onDeleteNotification={deleteNotification}
-            onOpenSettings={openSettings}
-          />
-        </div>
-        {sidebarOpen && (
-          <button
-            className="sidebar-scrim"
-            type="button"
-            aria-label="Close tasks"
-            onClick={closeSidebar}
-          />
+        {layout === "timer-first" ? (
+          <>
+            <div className="focus-column">{timerPanel}</div>
+            {tasksPanel}
+            {ledger}
+          </>
+        ) : (
+          <>
+            {tasksPanel}
+            {sidebarOpen && (
+              <button
+                className="sidebar-scrim"
+                type="button"
+                aria-label="Close tasks"
+                onClick={closeSidebar}
+              />
+            )}
+            <div className="focus-column">
+              {timerPanel}
+              {ledger}
+            </div>
+          </>
         )}
-        <div className="focus-column">
-          <TimerPanel
-            timer={snapshot.timer}
-            activeTask={activeTask}
-            roundsBeforeLongBreak={snapshot.settings.roundsBeforeLongBreak}
-            face={snapshot.settings.timerFace}
-            onSetPhase={selectPhase}
-            onToggleTimer={toggleTimer}
-            onReset={resetTimer}
-            onSkip={skipPhase}
-            onAddTask={openAddTask}
-            skipRequest={skipRequest}
-          />
-          <DayLedger
-            dayKey={dayKey}
-            sessions={snapshot.sessions}
-            tasks={snapshot.tasks}
-            interruptions={snapshot.interruptions}
-          />
-        </div>
       </div>
 
       <InterruptionDialog open={captureOpen} onClose={closeCapture} onSave={saveInterruption} />
@@ -339,6 +376,7 @@ export default function App() {
         captureStatus={snapshot.captureStatus}
         notificationCount={snapshot.notifications.length}
         onClose={closeSettings}
+        onBusyChange={setSettingsBusy}
         onSave={saveSettings}
         onPreviewSound={previewSound}
         onClearHistory={clearHistory}
@@ -349,4 +387,25 @@ export default function App() {
       </div>
     </main>
   );
+}
+
+export default function App() {
+  if (
+    DesignPreview &&
+    new URLSearchParams(window.location.search).get("design_preview") === "true"
+  ) {
+    return (
+      <Suspense fallback={<main className="loading-screen">Opening design preview…</main>}>
+        <DesignPreview />
+      </Suspense>
+    );
+  }
+  if (DesignLab && new URLSearchParams(window.location.search).get("design_lab") === "true") {
+    return (
+      <Suspense fallback={<main className="loading-screen">Opening design lab…</main>}>
+        <DesignLab />
+      </Suspense>
+    );
+  }
+  return <PomodoroWorkspace />;
 }

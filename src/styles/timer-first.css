@@ -1,0 +1,711 @@
+/* The selected timer-first workspace keeps every real workflow in normal
+   document flow. Its scrollport belongs to the workspace, not the clock or
+   individual histories, so short windows retain the whole day's record. */
+.layout-timer-first.app-shell {
+  grid-template-rows: var(--toolbar-height) minmax(0, 1fr);
+}
+
+.layout-timer-first.app-shell.has-banner {
+  grid-template-rows: var(--toolbar-height) auto minmax(0, 1fr);
+}
+
+.layout-timer-first .app-toolbar {
+  gap: 8px;
+  padding: 4px 16px;
+}
+
+.layout-timer-first .app-name {
+  font-weight: 600;
+}
+
+.layout-timer-first .icon-button {
+  width: 44px;
+  height: 44px;
+}
+
+.layout-timer-first .mobile-only,
+.layout-timer-first .sidebar-scrim {
+  display: none;
+}
+
+.layout-timer-first .workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: max-content;
+  align-content: start;
+  width: 100%;
+  max-width: 1008px;
+  margin-inline: auto;
+  padding: 24px 24px 32px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+}
+
+.layout-timer-first .focus-column {
+  display: block;
+  min-height: auto;
+  overflow: visible;
+  border: 1px solid var(--divider);
+  border-bottom: 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: var(--surface);
+}
+
+.layout-timer-first .timer-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto auto;
+  justify-items: center;
+  padding: 16px 32px 0;
+  overflow: visible;
+}
+
+.layout-timer-first .phase-tabs {
+  grid-column: 1;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+}
+
+.layout-timer-first .phase-tabs button {
+  min-height: 44px;
+  padding: 8px 16px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.layout-timer-first .phase-tabs button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.layout-timer-first .phase-tabs button[aria-pressed="true"] {
+  background: var(--surface-selected);
+  color: var(--phase-accent);
+  font-weight: 600;
+}
+
+.layout-timer-first .phase-tabs button[aria-pressed="true"]::after {
+  display: none;
+}
+
+.layout-timer-first .cycle-count {
+  grid-column: 1;
+  min-height: 28px;
+  justify-content: center;
+  gap: 12px;
+  padding: 4px 0 0;
+  border: 0;
+  font-size: 12px;
+}
+
+.layout-timer-first .round-marks i {
+  width: 6px;
+  height: 10px;
+}
+
+.layout-timer-first .timer-stage {
+  grid-column: 1;
+  width: 100%;
+  min-height: auto;
+  justify-content: flex-start;
+  padding: 20px 0 24px;
+  overflow: visible;
+}
+
+.layout-timer-first .timer-stage > .face-digits {
+  font-family: "Ubuntu Sans", Cantarell, sans-serif;
+  font-size: clamp(76px, 9vw, 104px);
+  font-weight: 300;
+  letter-spacing: -0.045em;
+  line-height: 1;
+}
+
+.layout-timer-first .timer-stage > .face-ring,
+.layout-timer-first .timer-stage > .face-analog,
+.layout-timer-first .timer-stage > .face-orbit {
+  inline-size: clamp(176px, 25vh, 224px);
+}
+
+.layout-timer-first .timer-stage > .face-arc {
+  inline-size: min(340px, 86%);
+}
+
+.layout-timer-first .timer-stage > .face-words {
+  font-size: clamp(30px, 4.5vw, 44px);
+}
+
+.layout-timer-first .progress-track {
+  width: min(300px, 78%);
+  height: 3px;
+  margin-top: 16px;
+  border-radius: 1px;
+}
+
+.layout-timer-first .session-task {
+  min-height: 48px;
+  max-width: min(560px, 100%);
+  gap: 4px;
+  margin-top: 20px;
+}
+
+.layout-timer-first .session-task strong {
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.layout-timer-first .session-task span {
+  font-size: 12px;
+}
+
+.layout-timer-first .inline-action {
+  min-height: 44px;
+}
+
+.layout-timer-first .timer-controls {
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.layout-timer-first .primary-control,
+.layout-timer-first .secondary-control,
+.layout-timer-first .small-primary,
+.layout-timer-first .text-button,
+.layout-timer-first .danger-button {
+  min-height: 44px;
+  font-weight: 600;
+}
+
+.layout-timer-first .timer-controls .primary-control {
+  min-width: 152px;
+  padding-inline: 24px;
+}
+
+.layout-timer-first .timer-controls .secondary-control {
+  padding-inline: 14px;
+  font-size: 13px;
+}
+
+.layout-timer-first .shortcut-hint {
+  display: flex;
+  margin-top: 14px;
+  font-size: 11px;
+}
+
+.layout-timer-first .sidebar-wrap,
+.layout-timer-first .sidebar-wrap.open {
+  position: static;
+  z-index: auto;
+  inset: auto;
+  display: block;
+  width: 100%;
+  min-height: auto;
+  overflow: visible;
+  border: 1px solid var(--divider);
+  border-bottom: 0;
+  background: var(--surface);
+  box-shadow: none;
+}
+
+.layout-timer-first .sidebar,
+.layout-timer-first .sidebar.captures-quiet {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: start;
+  width: 100%;
+  height: auto;
+  min-height: auto;
+}
+
+.layout-timer-first .sidebar-section {
+  min-height: auto;
+  overflow: visible;
+  padding: 12px 20px 20px;
+}
+
+.layout-timer-first .task-section {
+  grid-column: 1;
+  grid-row: 1 / 3;
+  align-self: stretch;
+  border-right: 1px solid var(--divider);
+}
+
+.layout-timer-first .inbox-section {
+  grid-column: 2;
+  grid-row: 1;
+  border-top: 0;
+}
+
+.layout-timer-first .notice-section {
+  grid-column: 2;
+  grid-row: 2;
+  border-top: 1px solid var(--divider);
+}
+
+.layout-timer-first .section-bar {
+  min-height: 44px;
+  margin-bottom: 8px;
+  padding: 0;
+  border: 0;
+}
+
+.layout-timer-first .section-bar h2 {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.layout-timer-first .section-count {
+  margin-right: auto;
+  font-size: 12px;
+}
+
+.layout-timer-first .task-list,
+.layout-timer-first .inbox-list,
+.layout-timer-first .notice-list,
+.layout-timer-first .completed-groups,
+.layout-timer-first .completed-group {
+  flex: 0 0 auto;
+  max-height: none;
+  overflow: visible;
+  overscroll-behavior: auto;
+}
+
+.layout-timer-first .task-list {
+  border-top: 1px solid var(--divider);
+}
+
+.layout-timer-first .task-row {
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  min-height: 56px;
+}
+
+.layout-timer-first .task-row.selected {
+  box-shadow: none;
+}
+
+.layout-timer-first .task-row.selected .task-title {
+  color: var(--focus);
+  font-weight: 600;
+}
+
+.layout-timer-first .task-select {
+  min-height: 44px;
+  padding-block: 10px;
+}
+
+.layout-timer-first .task-title,
+.layout-timer-first .completed-title {
+  overflow: visible;
+  font-size: 13px;
+  line-height: 1.5;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.layout-timer-first .task-count {
+  padding-right: 4px;
+  font-size: 12px;
+}
+
+.layout-timer-first .task-check,
+.layout-timer-first .row-menu > summary,
+.layout-timer-first .row-delete {
+  width: 44px;
+  min-height: 44px;
+}
+
+.layout-timer-first .menu-popover button {
+  min-height: 44px;
+}
+
+.layout-timer-first .completed-groups {
+  margin-top: 12px;
+}
+
+.layout-timer-first .completed-group > summary,
+.layout-timer-first .notice-group > summary {
+  min-height: 44px;
+  padding: 12px 0;
+}
+
+.layout-timer-first .completed-group .task-row,
+.layout-timer-first .completed-group .task-row.completed {
+  grid-template-columns: 44px minmax(0, 1fr) auto 44px;
+  min-height: 52px;
+  padding-right: 0;
+}
+
+.layout-timer-first .completed-group .task-row.completed.confirming {
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  gap: 8px;
+  padding-right: 8px;
+}
+
+.layout-timer-first .row-delete.confirming {
+  width: auto;
+  min-height: 44px;
+}
+
+.layout-timer-first .inbox-row {
+  grid-template-columns: minmax(0, 1fr) 44px;
+  min-height: 56px;
+}
+
+.layout-timer-first .inbox-text {
+  min-height: 44px;
+  gap: 12px;
+  padding: 12px 8px 12px 0;
+}
+
+.layout-timer-first .inbox-text span {
+  overflow: visible;
+  font-size: 13px;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.layout-timer-first .notice-row {
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  min-height: 56px;
+}
+
+.layout-timer-first .notice-check {
+  min-height: 44px;
+  padding-top: 14px;
+}
+
+.layout-timer-first .notice-content {
+  gap: 4px;
+  padding-block: 12px;
+}
+
+.layout-timer-first .notice-summary {
+  font-weight: 500;
+}
+
+.layout-timer-first .notice-list .capture-status {
+  margin: 8px 0;
+}
+
+.layout-timer-first .empty-copy {
+  padding: 8px 0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.layout-timer-first .empty-task {
+  min-height: 56px;
+  gap: 12px;
+  padding: 12px 8px;
+  font-size: 13px;
+}
+
+.layout-timer-first .task-form {
+  margin-bottom: 12px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  background: var(--surface-raised);
+}
+
+.layout-timer-first .task-form > input {
+  min-height: 44px;
+}
+
+.layout-timer-first .estimate-stepper {
+  grid-template-columns: 44px 32px 44px;
+  min-height: 44px;
+}
+
+.layout-timer-first .estimate-stepper button,
+.layout-timer-first .estimate-stepper output {
+  min-height: 44px;
+}
+
+.layout-timer-first .ledger {
+  min-height: auto;
+  overflow: visible;
+  border: 1px solid var(--divider);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  background: var(--surface);
+}
+
+.layout-timer-first .ledger details {
+  display: block;
+  height: auto;
+  min-height: auto;
+}
+
+.layout-timer-first .ledger summary {
+  min-height: 56px;
+  grid-template-columns: auto minmax(0, 1fr) 24px;
+  gap: 12px;
+  padding: 12px 20px;
+  border-bottom: 0;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.layout-timer-first .ledger details[open] > summary {
+  border-bottom: 1px solid var(--divider);
+}
+
+.layout-timer-first .ledger-summary {
+  overflow: visible;
+  font-size: 12px;
+  line-height: 1.5;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.layout-timer-first .capacity-line {
+  grid-template-columns: auto minmax(80px, 1fr) auto;
+  min-height: 44px;
+  padding: 8px 20px;
+}
+
+.layout-timer-first .capacity-line > span:last-child {
+  display: inline;
+}
+
+.layout-timer-first .session-list {
+  overflow: visible;
+  overscroll-behavior: auto;
+}
+
+.layout-timer-first .session-row {
+  grid-template-columns: 64px minmax(0, 1fr) 92px 42px;
+  min-height: 44px;
+  padding: 10px 20px;
+}
+
+.layout-timer-first .session-kind {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.layout-timer-first .session-outcome {
+  display: inline;
+}
+
+.layout-timer-first .empty-ledger {
+  padding: 16px 20px 20px;
+}
+
+@media (max-width: 859px) {
+  .layout-timer-first .workspace {
+    padding: 16px 16px 24px;
+  }
+
+  .layout-timer-first .app-toolbar {
+    padding-inline: 12px;
+  }
+
+  .layout-timer-first .timer-panel {
+    padding-inline: 24px;
+  }
+
+  .layout-timer-first .sidebar-section {
+    padding-inline: 16px;
+  }
+
+  .layout-timer-first .ledger summary,
+  .layout-timer-first .capacity-line,
+  .layout-timer-first .session-row,
+  .layout-timer-first .empty-ledger {
+    padding-inline: 16px;
+  }
+}
+
+@media (max-width: 639px) {
+  .layout-timer-first .workspace {
+    padding: 12px 12px 20px;
+  }
+
+  .layout-timer-first .timer-panel {
+    padding: 12px 16px 0;
+  }
+
+  .layout-timer-first .phase-tabs {
+    justify-content: center;
+    gap: 0;
+  }
+
+  .layout-timer-first .phase-tabs button {
+    padding-inline: 12px;
+    font-size: 12px;
+  }
+
+  .layout-timer-first .timer-stage {
+    padding-top: 16px;
+    padding-bottom: 20px;
+  }
+
+  .layout-timer-first .timer-stage > .face-digits {
+    font-size: clamp(64px, 18vw, 88px);
+  }
+
+  .layout-timer-first .sidebar,
+  .layout-timer-first .sidebar.captures-quiet {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto;
+  }
+
+  .layout-timer-first .task-section {
+    grid-column: 1;
+    grid-row: 1;
+    border-right: 0;
+  }
+
+  .layout-timer-first .inbox-section {
+    grid-column: 1;
+    grid-row: 2;
+    border-top: 1px solid var(--divider);
+  }
+
+  .layout-timer-first .notice-section {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  .layout-timer-first .capacity-line {
+    grid-template-columns: auto minmax(70px, 1fr);
+  }
+
+  .layout-timer-first .capacity-line > span:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .layout-timer-first .session-row {
+    grid-template-columns: 44px minmax(0, 1fr) 72px 32px;
+    gap: 8px;
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 479px) {
+  .layout-timer-first .workspace {
+    padding: 8px 8px 16px;
+  }
+
+  .layout-timer-first .app-toolbar {
+    gap: 4px;
+    padding-inline: 8px;
+  }
+
+  .layout-timer-first .app-name {
+    margin-right: auto;
+  }
+
+  .layout-timer-first .timer-controls {
+    width: 100%;
+    max-width: 340px;
+  }
+
+  .layout-timer-first .timer-controls .primary-control {
+    flex: 1 1 100%;
+  }
+
+  .layout-timer-first .timer-controls .secondary-control {
+    flex: 1 1 calc(50% - 4px);
+  }
+
+  .layout-timer-first .shortcut-hint {
+    max-width: 280px;
+    column-gap: 6px;
+    row-gap: 4px;
+    font-size: 11px;
+  }
+
+  .layout-timer-first .ledger summary {
+    grid-template-columns: minmax(0, 1fr) 24px;
+    gap: 4px 12px;
+  }
+
+  .layout-timer-first .ledger-summary {
+    grid-column: 1;
+    grid-row: 2;
+    text-align: left;
+  }
+
+  .layout-timer-first .ledger-chevron {
+    grid-column: 2;
+    grid-row: 1 / 3;
+  }
+
+  .layout-timer-first .task-form-row {
+    gap: 12px;
+  }
+
+  .layout-timer-first .form-actions {
+    flex: 1 0 100%;
+    justify-content: flex-end;
+    margin-left: 0;
+  }
+}
+
+@media (max-height: 619px) {
+  .layout-timer-first .timer-stage {
+    padding-top: 12px;
+    padding-bottom: 16px;
+  }
+
+  .layout-timer-first .timer-stage > .face-digits {
+    font-size: clamp(64px, 15vh, 84px);
+  }
+
+  .layout-timer-first .session-task {
+    min-height: 44px;
+    margin-top: 16px;
+  }
+
+  .layout-timer-first .timer-controls {
+    margin-top: 12px;
+  }
+
+  .layout-timer-first .shortcut-hint {
+    display: flex;
+    margin-top: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .layout-timer-first *,
+  .layout-timer-first *::before,
+  .layout-timer-first *::after {
+    animation: none;
+    transition: none;
+    scroll-behavior: auto;
+  }
+}
+
+@media (forced-colors: active) {
+  .layout-timer-first .phase-tabs button[aria-pressed="true"],
+  .layout-timer-first .task-row.selected {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  .layout-timer-first .progress-track {
+    border: 1px solid CanvasText;
+  }
+
+  .layout-timer-first .progress-track > span {
+    background: Highlight;
+  }
+
+  .layout-timer-first .sidebar-wrap,
+  .layout-timer-first .focus-column,
+  .layout-timer-first .ledger {
+    border-color: CanvasText;
+  }
+}

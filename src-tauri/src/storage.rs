@@ -148,6 +148,11 @@ impl Store {
     /// the person cannot do anything about from inside the app. Doing nothing
     /// lets them keep using the timer while the banner tells them that nothing
     /// is being saved.
+    ///
+    /// A readable legacy store remains open for retries: its first upgrade
+    /// must preserve the original bytes in a recovery point. If that fails,
+    /// report the unsaved changes and leave both the original and migration
+    /// pending, so repairing backup access allows the next save to proceed.
     pub fn save(&self, data: &AppData) -> Result<(), String> {
         if !self.writable.load(Ordering::Acquire) {
             return Ok(());
@@ -162,8 +167,20 @@ impl Store {
         restrict(parent, DIRECTORY_MODE);
 
         if self.migration_pending.load(Ordering::Acquire) && self.path.exists() {
-            let previous = fs::read(&self.path).map_err(|error| error.to_string())?;
-            self.backup_bytes(&previous, chrono::Utc::now().timestamp_millis())?;
+            // The legacy file is the only durable copy until this succeeds.
+            // Keep the migration pending on failure so a later save retries
+            // after access to the backup folder has been repaired.
+            fs::read(&self.path)
+                .map_err(|error| error.to_string())
+                .and_then(|previous| {
+                    self.backup_bytes(&previous, chrono::Utc::now().timestamp_millis())
+                })
+                .map_err(|error| {
+                    format!(
+                        "Could not back up the existing data before upgrading it. Changes have not been saved; the original file is unchanged. Check access to {} and try again: {error}",
+                        self.directory().join("backups").display()
+                    )
+                })?;
         }
         write_private(&self.path, &schema::encode(data)?)?;
         self.migration_pending.store(false, Ordering::Release);

@@ -118,11 +118,36 @@ describe("useCountdown", () => {
       visibility.mockReturnValue("hidden");
       act(() => document.dispatchEvent(new Event("visibilitychange")));
       expect(result.current).toBe(600);
+      expect(vi.getTimerCount()).toBe(0);
+      act(() => void vi.advanceTimersByTime(10_000));
+      expect(result.current).toBe(600);
+      expect(vi.getTimerCount()).toBe(0);
 
       visibility.mockReturnValue("visible");
       act(() => document.dispatchEvent(new Event("visibilitychange")));
-      expect(result.current).toBe(60);
+      expect(result.current).toBe(50);
       expect(vi.getTimerCount()).toBe(1);
+    } finally {
+      visibility.mockRestore();
+    }
+  });
+
+  it("waits to schedule a countdown mounted in a hidden window until it becomes visible", () => {
+    vi.setSystemTime(0);
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    try {
+      const { result } = renderHook(() =>
+        useCountdown(timer({ status: "running", endsAt: 60_000, remainingSeconds: 60 })),
+      );
+      expect(vi.getTimerCount()).toBe(0);
+      act(() => void vi.advanceTimersByTime(90_000));
+      act(() => window.dispatchEvent(new Event("focus")));
+      expect(vi.getTimerCount()).toBe(0);
+
+      visibility.mockReturnValue("visible");
+      act(() => document.dispatchEvent(new Event("visibilitychange")));
+      expect(result.current).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       visibility.mockRestore();
     }

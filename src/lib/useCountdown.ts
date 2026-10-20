@@ -33,6 +33,9 @@ export function useCountdown(timer: TimerState, now: () => number = Date.now): n
       // that timeout so focus and visibility events never start extra clocks.
       if (timeout !== null) window.clearTimeout(timeout);
       timeout = null;
+      // The backend keeps time while the window is in the tray. Stop UI
+      // wakeups until it is visible again, then calculate from the deadline.
+      if (document.visibilityState === "hidden") return;
       const current = now();
       setTicked({ endsAt, remaining: secondsUntil(endsAt, current) });
       if (current >= endsAt) return;
@@ -42,16 +45,13 @@ export function useCountdown(timer: TimerState, now: () => number = Date.now): n
       const untilNextBoundary = (endsAt - current) % 1_000 || 1_000;
       timeout = window.setTimeout(tick, untilNextBoundary);
     };
-    const onVisible = () => {
-      if (document.visibilityState === "visible") tick();
-    };
     tick();
     window.addEventListener("focus", tick);
-    document.addEventListener("visibilitychange", onVisible);
+    document.addEventListener("visibilitychange", tick);
     return () => {
       if (timeout !== null) window.clearTimeout(timeout);
       window.removeEventListener("focus", tick);
-      document.removeEventListener("visibilitychange", onVisible);
+      document.removeEventListener("visibilitychange", tick);
     };
   }, [running, endsAt, now]);
 

@@ -70,7 +70,7 @@ fn first_save_migrates_legacy_data_and_preserves_its_exact_original_bytes_once()
 }
 
 #[test]
-fn failed_migration_backup_keeps_the_legacy_store_unchanged() {
+fn failed_migration_backup_preserves_the_original_and_retries_after_recovery() {
     let scratch = Scratch::new();
     let store = scratch.store();
     let legacy = br#"{"tasks":[],"settings":{"focusMinutes":30}}"#;
@@ -79,9 +79,28 @@ fn failed_migration_backup_keeps_the_legacy_store_unchanged() {
     let mut loaded = store.load().unwrap();
     loaded.create_task("Unsaved change", 1, 10);
 
-    assert!(store.save(&loaded).is_err());
-    assert_eq!(fs::read(&store.path).unwrap(), legacy);
-    assert!(store.migration_pending.load(Ordering::Acquire));
+    for _ in 0..2 {
+        let error = store.save(&loaded).unwrap_err();
+        assert!(error.contains("Changes have not been saved"));
+        assert!(error.contains("original file is unchanged"));
+        assert!(error.contains("backups"));
+        assert_eq!(fs::read(&store.path).unwrap(), legacy);
+        assert!(store.migration_pending.load(Ordering::Acquire));
+        assert!(store.ensure_writable().is_ok());
+    }
+
+    // Repair the failed backup location in this owned temporary directory.
+    // The same Store must recover without a restart or losing pending work.
+    fs::remove_file(scratch.0.join("backups")).unwrap();
+    store.save(&loaded).unwrap();
+    assert!(!store.migration_pending.load(Ordering::Acquire));
+    let backups = scratch.backups();
+    assert_eq!(backups.len(), 1);
+    assert_eq!(fs::read(&backups[0]).unwrap(), legacy);
+    assert_eq!(store.load().unwrap(), loaded);
+
+    store.save(&loaded).unwrap();
+    assert_eq!(scratch.backups(), backups);
 }
 
 #[test]

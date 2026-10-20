@@ -47,6 +47,31 @@ describe("the round count", () => {
   });
 });
 
+describe("skip requests", () => {
+  it("ignores requests from before mount and handles the next press once", () => {
+    const props = {
+      timer: defaultSnapshot.timer,
+      activeTask: null,
+      roundsBeforeLongBreak: 4,
+      face: defaultSnapshot.settings.timerFace,
+      onSetPhase: vi.fn(),
+      onToggleTimer: vi.fn(),
+      onReset: vi.fn(),
+      onSkip: vi.fn(),
+      onAddTask: vi.fn(),
+      skipRequest: 2,
+    };
+    const { rerender } = render(<TimerPanel {...props} />);
+    expect(props.onSkip).not.toHaveBeenCalled();
+
+    rerender(<TimerPanel {...props} skipRequest={3} />);
+    expect(props.onSkip).toHaveBeenCalledTimes(1);
+
+    rerender(<TimerPanel {...props} skipRequest={3} face="ring" />);
+    expect(props.onSkip).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("the countdown it owns", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => {

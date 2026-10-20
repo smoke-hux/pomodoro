@@ -4,9 +4,22 @@ Pomodoro is an Ubuntu desktop application with a React/TypeScript interface and 
 
 ## Development setup
 
-Use Node.js 22.14 or newer and stable Rust. Ubuntu 24.04 is the CI test environment; release packages are currently built on Ubuntu 22.04 x86_64 to retain compatibility with that release. GNOME 42 (Ubuntu 22.04) and GNOME 46 (Ubuntu 24.04) are the reference desktop environments. Other Linux desktops may run the timer, but GNOME Do Not Disturb and notification monitoring need explicit desktop verification. Windows and macOS are not supported release targets.
+Use Node.js 22.14 or newer and stable Rust. Ubuntu 26.04 LTS is the current desktop target; backend and native smoke CI run on both Ubuntu 24.04 and 26.04. Release packages retain Ubuntu 22.04 x86_64 as their build baseline inside a container on a supported runner, then must install successfully on both newer LTS runners before publication. GitHub's deprecated Ubuntu 22.04 runner is not required.
 
-Install the native packages listed in [README.md](README.md#develop), then run `npm ci`. Start the desktop application with `npm run tauri dev`. The browser preview (`npm run dev`) uses sample data and cannot verify native behavior.
+The reference desktops are GNOME 42 on Ubuntu 22.04, GNOME 46 on 24.04, and GNOME 50 on 26.04. Ubuntu 26.04's GNOME session uses Wayland. Keep GTK/WebKit's backend selection automatic in the application; headless CI uses Xvfb explicitly and does not establish native Wayland compatibility. Other Linux desktops need explicit verification of desktop integration. Windows and macOS are not supported release targets.
+
+Install Node.js and Rust separately, then review and install the shared native prerequisites:
+
+```sh
+bash scripts/setup-linux.sh --print
+bash scripts/setup-linux.sh --install
+npm ci
+npm run tauri dev
+```
+
+The setup script supports Ubuntu 22.04, 24.04 and 26.04, defaults to printing the package command, and only invokes apt with `--install`. It does not install Node.js or Rust, enable repositories, or change desktop settings. Ubuntu's Universe repository and normal updates/security repositories must be enabled for the native packages. Add `--desktop` when setting up the WebDriver smoke test. On Ubuntu 26.04 this selects `webkitgtk-webdriver`; on older LTS releases it selects `webkit2gtk-driver`.
+
+The browser preview (`npm run dev`) uses sample data and cannot verify native behavior. See [the testing guide](docs/testing.md) for isolated desktop tests and the manual release checks. The prerequisites follow [Tauri's Linux requirements](https://v2.tauri.app/start/prerequisites/); [Ubuntu's WebDriver manual](https://manpages.ubuntu.com/manpages/resolute/man1/WebKitWebDriver.1.html) documents the current driver package.
 
 ## Before opening a pull request
 

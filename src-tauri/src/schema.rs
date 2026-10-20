@@ -75,7 +75,7 @@ fn unique_ids<'a>(ids: impl Iterator<Item = &'a str>, label: &str) -> Result<(),
 
 /// Imports are stricter than legacy startup: an unrelated JSON object must
 /// never silently become an empty replacement for a person's work.
-pub fn import(bytes: &[u8]) -> Result<AppData, String> {
+pub fn import(bytes: &[u8], now_ms: i64) -> Result<AppData, String> {
     if bytes.len() as u64 > MAX_IMPORT_BYTES {
         return Err("Choose a data file smaller than 32 MiB.".into());
     }
@@ -156,6 +156,10 @@ pub fn import(bytes: &[u8]) -> Result<AppData, String> {
             note.task_id = None;
         }
     }
+    // A copied running store may still carry the remaining time from its last
+    // save. Capture its authoritative deadline at preview time before pausing;
+    // the prepared import then stays frozen while the person confirms it.
+    data.timer.normalize_remaining(now_ms);
     // Import never runs a timer or changes a desktop setting on another machine.
     if data.timer.status == TimerStatus::Running {
         data.timer.status = TimerStatus::Paused;
@@ -191,20 +195,20 @@ mod tests {
             decode(br#"{"schemaVersion":99}"#),
             Err(DecodeError::FutureVersion(99))
         ));
-        assert!(import(br#"{"schemaVersion":99}"#)
+        assert!(import(br#"{"schemaVersion":99}"#, 100)
             .unwrap_err()
             .contains("newer"));
     }
 
     #[test]
     fn unrelated_and_inconsistent_imports_are_rejected() {
-        assert!(import(b"{}").is_err());
-        assert!(import(b"[]").is_err());
-        assert!(import(b"not json").is_err());
+        assert!(import(b"{}", 100).is_err());
+        assert!(import(b"[]", 100).is_err());
+        assert!(import(b"not json", 100).is_err());
         let mut data = AppData::default();
         data.create_task("A task", 1, 100);
         data.tasks.push(data.tasks[0].clone());
-        assert!(import(&encode(&data).unwrap())
+        assert!(import(&encode(&data).unwrap(), 100)
             .unwrap_err()
             .contains("duplicate"));
     }
@@ -217,13 +221,46 @@ mod tests {
         data.settings.notification_filter.enabled = true;
         data.settings.silence_banners_during_focus = true;
         data.banner_restore = Some(true);
-        let restored = import(&encode(&data).unwrap()).unwrap();
+        let restored = import(&encode(&data).unwrap(), 100).unwrap();
         assert_eq!(restored.tasks, data.tasks);
         assert_eq!(restored.timer.status, TimerStatus::Paused);
         assert_eq!(restored.timer.ends_at, None);
         assert!(!restored.settings.notification_filter.enabled);
         assert!(!restored.settings.silence_banners_during_focus);
         assert_eq!(restored.banner_restore, None);
+    }
+
+    #[test]
+    fn importing_a_running_store_freezes_the_deadline_remaining_at_preview_time() {
+        let mut data = AppData::default();
+        data.timer.duration_seconds = 120;
+        data.timer.remaining_seconds = 120;
+        data.start_or_resume(1_000);
+
+        let restored = import(&encode(&data).unwrap(), 61_001).unwrap();
+
+        assert_eq!(restored.timer.status, TimerStatus::Paused);
+        assert_eq!(restored.timer.remaining_seconds, 60);
+        assert_eq!(restored.timer.ends_at, None);
+        assert_eq!(restored.timer.started_at, data.timer.started_at);
+        assert_eq!(restored.timer.current_remaining_seconds(121_000), 60);
+        assert!(restored.sessions.is_empty());
+    }
+
+    #[test]
+    fn importing_an_expired_running_store_does_not_revive_its_saved_remaining_time() {
+        let mut data = AppData::default();
+        data.timer.duration_seconds = 120;
+        data.timer.remaining_seconds = 120;
+        data.start_or_resume(1_000);
+
+        let restored = import(&encode(&data).unwrap(), 121_000).unwrap();
+
+        assert_eq!(restored.timer.status, TimerStatus::Paused);
+        assert_eq!(restored.timer.remaining_seconds, 0);
+        assert_eq!(restored.timer.ends_at, None);
+        assert!(restored.sessions.is_empty());
+        assert_eq!(restored.timer.completed_in_cycle, 0);
     }
 
     #[test]
@@ -245,7 +282,7 @@ mod tests {
                 .collect(),
             ..AppData::default()
         };
-        let restored = import(&encode(&data).unwrap()).unwrap();
+        let restored = import(&encode(&data).unwrap(), 100).unwrap();
         assert_eq!(restored.sessions.len(), SESSION_RETENTION);
         assert_eq!(restored.notifications.len(), NOTIFICATION_RETENTION);
 
@@ -253,7 +290,7 @@ mod tests {
             id: "one-too-many".into(),
             ..SessionRecord::default()
         });
-        assert!(import(&encode(&data).unwrap())
+        assert!(import(&encode(&data).unwrap(), 100)
             .unwrap_err()
             .contains("sessions"));
         data.sessions.pop();
@@ -261,7 +298,7 @@ mod tests {
             id: "one-too-many".into(),
             ..DesktopNotification::default()
         });
-        assert!(import(&encode(&data).unwrap())
+        assert!(import(&encode(&data).unwrap(), 100)
             .unwrap_err()
             .contains("notifications"));
     }
