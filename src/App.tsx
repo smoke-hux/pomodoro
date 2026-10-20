@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Clock3, Inbox, Menu, Monitor, Moon, Settings as SettingsIcon, Sun } from "lucide-react";
 import { api } from "./lib/api";
 import { useAppSnapshot } from "./lib/useAppSnapshot";
@@ -28,13 +28,6 @@ const themeLabels: Record<ThemePreference, string> = {
   dark: "Dark",
 };
 const themeIcons = { system: Monitor, light: Sun, dark: Moon };
-
-// The temporary design lab is available only during development. Release
-// builds remove this import and always launch the real desktop workspace.
-const DesignLab = import.meta.env.DEV ? lazy(() => import("../.claude-design/lab/page")) : null;
-const DesignPreview = import.meta.env.DEV
-  ? lazy(() => import("../.claude-design/preview/page"))
-  : null;
 
 export function PomodoroWorkspace({ layout = "legacy" }: { layout?: "legacy" | "timer-first" }) {
   const inTauri = "__TAURI_INTERNALS__" in window;
@@ -390,22 +383,5 @@ export function PomodoroWorkspace({ layout = "legacy" }: { layout?: "legacy" | "
 }
 
 export default function App() {
-  if (
-    DesignPreview &&
-    new URLSearchParams(window.location.search).get("design_preview") === "true"
-  ) {
-    return (
-      <Suspense fallback={<main className="loading-screen">Opening design preview…</main>}>
-        <DesignPreview />
-      </Suspense>
-    );
-  }
-  if (DesignLab && new URLSearchParams(window.location.search).get("design_lab") === "true") {
-    return (
-      <Suspense fallback={<main className="loading-screen">Opening design lab…</main>}>
-        <DesignLab />
-      </Suspense>
-    );
-  }
   return <PomodoroWorkspace />;
 }

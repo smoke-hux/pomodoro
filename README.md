@@ -1,12 +1,14 @@
 # Pomodoro
 
-A local-first focus timer for Ubuntu, built on the Pomodoro Technique: work in focused intervals, take a short break after each one, and a longer break after four. It lives in the system tray, keeps a plan and a record of the day, catches the things that interrupt you so you can deal with them afterwards, and tells you — with your desktop's own sound and a notification — when an interval is over.
+A local-first focus timer for Ubuntu, built with Tauri, Rust, React and TypeScript. Plan your tasks, work in focused intervals, take regular breaks, and review the day's sessions and interruptions. Desktop sounds and notifications announce interval changes; an available system tray keeps the timer running with the window hidden.
 
 It is a standalone desktop app. There is no account, no cloud, no sync and no network access at all. Active data lives in one JSON file in your home directory, with local recovery copies for imports and storage upgrades; you can also export it yourself.
 
+[Install](#install-on-ubuntu) · [Ubuntu compatibility](#ubuntu-compatibility) · [Develop](#develop) · [Testing](docs/testing.md) · [Architecture](docs/architecture.md) · [Releasing](#releasing)
+
 ## What it does
 
-**The timer.** A 25-minute focus, a 5-minute short break and a 15-minute long break after four rounds, all adjustable. Breaks can start by themselves when a focus ends, and the next focus can start by itself when a break ends. The deadline is an absolute moment, not a count of ticks, so an interval ends on time whether the window was minimised, the screen was locked or the laptop was asleep. Ten timer faces — digits, ring, arc, analog, orbit, bar, blocks, pips, vessel and words — are under Settings → Appearance.
+**The timer.** A 25-minute focus, a 5-minute short break and a 15-minute long break after four rounds, all adjustable. Breaks can start by themselves when a focus ends, and the next focus can start by itself when a break ends. The backend uses an absolute deadline to reconcile the interval after minimising, screen locking or suspend. The visible countdown stops scheduling updates while hidden and catches up when the window returns. Ten timer faces — digits, ring, arc, analog, orbit, bar, blocks, pips, vessel and words — are under Settings → Appearance.
 
 **Tasks.** Each task carries an estimate of how many focus sessions it needs and a count of how many it has had; a focus session credits the task it was started for. Tasks can be edited and deleted from their ⋯ menu, ticked off, reopened, and are grouped into _Completed today_ and _Completed earlier_. Estimating more than four sessions gets a gentle suggestion to split the work. A focus interval cannot start without a task selected, so every session is attributed to something.
 
@@ -103,6 +105,20 @@ Capture needs a session bus that will hand out a monitor connection, which is th
 
 Edits belong to you until you press Save: a state change arriving from the timer mid-edit does not overwrite what you were typing, a save the app refuses leaves the dialog open with your edits, and Cancel discards them.
 
+## Ubuntu compatibility
+
+| Ubuntu release | Project coverage                                                                              |
+| -------------- | --------------------------------------------------------------------------------------------- |
+| 26.04 LTS      | Current desktop target; backend, headless desktop smoke and release package installation jobs |
+| 24.04 LTS      | Backend, headless desktop smoke and release package installation jobs                         |
+| 22.04 LTS      | Release build baseline inside an Ubuntu 22.04 container; manual desktop regression checks     |
+
+Release packages target x86_64. Building on a newer Ubuntu release gives that local binary the newer system's library requirements; use the release workflow when retaining the 22.04 baseline matters.
+
+On Ubuntu 26.04's GNOME 50 desktop, GTK and WebKit select the Wayland backend automatically. GNOME needs an AppIndicator extension for tray icons. If no active tray host can be confirmed, or the optional `gdbus` tool is missing, closing exits through the normal save and desktop-banner cleanup path.
+
+The automated desktop tests use Xvfb. Native Wayland, fractional scaling, screen locking, suspend/resume, Orca and tray-extension behavior still require the [manual desktop checks](docs/testing.md#checks-requiring-a-real-desktop). Keep backend selection automatic for ordinary desktop use; the X11 override is specific to headless smoke testing.
+
 ## Install on Ubuntu
 
 ### With apt
@@ -136,7 +152,7 @@ A release also attaches the `.deb` on its own, for a machine that should not car
 
     sudo apt install ./pomodoro_0.1.0_amd64.deb
 
-Or, without administrator rights, install it for your user alone. The package's files go under your home directory, and the launcher entry points at them:
+Or, without administrator rights, extract it for your user alone. The native runtime libraries must already be installed; extraction does not resolve package dependencies. The package's files go under your home directory, and the launcher entry points at them:
 
     dpkg-deb -x pomodoro_0.1.0_amd64.deb /tmp/pomodoro-pkg
     install -Dm755 /tmp/pomodoro-pkg/usr/bin/pomodoro ~/.local/bin/pomodoro
@@ -151,10 +167,6 @@ Or, without administrator rights, install it for your user alone. The package's 
 To remove a per-user install, delete those files. Do not keep both kinds of install at once.
 
 Open Pomodoro from the application launcher. With an active tray host, closing the window hides it so an active timer can continue; choose Quit from the tray menu to exit completely. Without a tray host, closing exits and saves the timer as paused, so the app cannot become inaccessible in the background.
-
-Ubuntu 26.04 LTS with GNOME 50 and Wayland is the current desktop target. Ubuntu 24.04 remains in the automated test matrix. Released packages keep Ubuntu 22.04 x86_64 as their build baseline, inside a container on a current runner; package installation and shared-library resolution are checked on 24.04 and 26.04 before publication. A package you build yourself carries the compatibility of whatever release you build it on.
-
-GTK and WebKit select the display backend automatically. Keep that default on Wayland; forcing X11 is only needed for the headless Xvfb smoke test. GNOME needs an AppIndicator extension for tray icons. When its host, the tray library or the optional `gdbus` tool is unavailable, the timer still opens and close uses the safe exit behavior above. Screen locking, suspend/resume, fractional scaling and desktop integrations should be checked in a real GNOME session before a release; headless CI does not establish those behaviors.
 
 ## Local data
 
@@ -206,15 +218,17 @@ Use the shared prerequisite script on Ubuntu 22.04, 24.04 or 26.04. It prints th
     bash scripts/setup-linux.sh --print
     bash scripts/setup-linux.sh --install
 
-The script installs the GTK 3, WebKitGTK 4.1, AppIndicator and build prerequisites used by CI. Node.js and Rust are installed separately. For desktop smoke testing, add `--desktop`; it selects `webkitgtk-webdriver` on Ubuntu 26.04 and `webkit2gtk-driver` on older LTS releases. See [Testing](docs/testing.md) for the complete setup.
+The script installs the GTK 3, WebKitGTK 4.1, AppIndicator and build prerequisites used by CI. Ubuntu's Universe and normal updates/security repositories must be enabled. Install Node.js and Rust separately.
+
+For desktop smoke testing, use `bash scripts/setup-linux.sh --install --desktop`; this adds Xvfb and D-Bus tools, plus `webkitgtk-webdriver` on Ubuntu 26.04 or `webkit2gtk-driver` on older LTS releases. See [Testing](docs/testing.md) for the driver, build and isolated-run commands.
 
 Use Node.js 22.14 or newer (`.nvmrc` selects Node 22) and stable Rust. From the repository root, install the locked project dependencies and run the checks:
 
     npm ci
     npm run check
     cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
-    cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-    cargo test --manifest-path src-tauri/Cargo.toml
+    cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+    cargo test --locked --manifest-path src-tauri/Cargo.toml
 
 `npm run check` runs linting, formatting, dependency-license checks, the TypeScript/production build and frontend tests. Build the frontend before running the Rust checks: Tauri's build script needs `dist/`. Use `npm run format` and `cargo fmt --manifest-path src-tauri/Cargo.toml` to apply formatting. Use `npm run test:watch` while working on frontend tests. CI also runs a real desktop smoke test in an isolated XDG directory and D-Bus session; see [Testing](docs/testing.md) for the required drivers and commands.
 
@@ -232,8 +246,6 @@ Run the desktop app in development:
 
 Run `npm run dev` and open `http://127.0.0.1:1420` in a browser to see the interface with sample data and no backend. The theme button works there; native commands and saving require the desktop app.
 
-While the redesign is being reviewed, `http://127.0.0.1:1420/?design_lab=true` opens five interactive design alternatives with shared sample data and a feedback overlay. The selected timer-first design is integrated with the real components at `http://127.0.0.1:1420/?design_preview=true`, with a before/after switch. These temporary previews are available only in development; their code is excluded from production builds. The selected layout will become the default after final review.
-
 `public/theme-init.js` is the one script outside the bundle. It applies the remembered theme before the first paint, and it is a file rather than an inline script because the content security policy only allows the app's own scripts.
 
 Build a Debian package:
@@ -242,7 +254,14 @@ Build a Debian package:
 
 ## Releasing
 
-A release is a tag. Pushing `v0.1.1` builds the package on Ubuntu 22.04, attaches it to a GitHub release, and rebuilds the apt repository from the packages of every release so far, so an older version stays installable while people upgrade. The workflow is `.github/workflows/release.yml`; it refuses to build unless the tag agrees with the version in `package.json`, `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml`.
+A release is a tag. Pushing `v0.1.1` starts the [release workflow](.github/workflows/release.yml):
+
+1. Build the Debian package in an Ubuntu 22.04 container on an Ubuntu 26.04 runner, preserving the older library baseline.
+2. Install the generated package on Ubuntu 24.04 and 26.04 and check for missing shared libraries.
+3. Attach the package to a GitHub release only after those checks pass.
+4. Rebuild and publish the signed apt repository, retaining packages from previous releases.
+
+The workflow refuses to build unless the tag agrees with the version in `package.json`, `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml`.
 
     # set the same version in package.json, src-tauri/tauri.conf.json
     # and src-tauri/Cargo.toml first

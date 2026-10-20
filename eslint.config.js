@@ -10,6 +10,7 @@ export default tseslint.config(
       ".agents/**",
       ".codex/**",
       ".playwright-mcp/**",
+      ".claude-design/**",
       "test-artifacts/**",
       "node_modules/**",
       "dist/**",
@@ -23,7 +24,7 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ["src/**/*.{ts,tsx}", ".claude-design/**/*.{ts,tsx}", "public/**/*.js"],
+    files: ["src/**/*.{ts,tsx}", "public/**/*.js"],
     languageOptions: { globals: globals.browser },
   },
   {
@@ -31,7 +32,7 @@ export default tseslint.config(
     languageOptions: { globals: globals.node },
   },
   {
-    files: ["src/**/*.{ts,tsx}", ".claude-design/**/*.{ts,tsx}"],
+    files: ["src/**/*.{ts,tsx}"],
     plugins: { "react-hooks": reactHooks },
     rules: {
       // These correctness rules apply whether or not React Compiler is used.
@@ -41,7 +42,7 @@ export default tseslint.config(
   },
   {
     ...jsxA11y.flatConfigs.recommended,
-    files: ["src/**/*.tsx", ".claude-design/**/*.tsx"],
+    files: ["src/**/*.tsx"],
     rules: {
       ...jsxA11y.flatConfigs.recommended.rules,
       "jsx-a11y/label-has-associated-control": ["error", { depth: 3 }],

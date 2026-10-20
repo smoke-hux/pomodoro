@@ -1,6 +1,7 @@
 .agents/
 .codex/
 .playwright-mcp/
+.claude-design/
 node_modules/
 dist/
 test-artifacts/

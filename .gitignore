@@ -7,3 +7,4 @@ src-tauri/target/
 *.deb
 test-artifacts/
 .playwright-mcp/
+.claude-design/
