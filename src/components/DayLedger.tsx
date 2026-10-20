@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import {
   getCompletedFocusDisplayMinutes,
@@ -15,9 +15,17 @@ interface DayLedgerProps {
   sessions: SessionRecord[];
   tasks: FocusTask[];
   interruptions: Interruption[];
+  defaultExpanded?: boolean;
 }
 
-function DayLedgerComponent({ dayKey, sessions, tasks, interruptions }: DayLedgerProps) {
+function DayLedgerComponent({
+  dayKey,
+  sessions,
+  tasks,
+  interruptions,
+  defaultExpanded = true,
+}: DayLedgerProps) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const day = getDayBoundsForKey(dayKey);
   const isToday = (timestamp: number | null) => isWithinDay(timestamp, day);
   const today = sessions
@@ -39,7 +47,7 @@ function DayLedgerComponent({ dayKey, sessions, tasks, interruptions }: DayLedge
 
   return (
     <section className="ledger" aria-labelledby="ledger-heading">
-      <details open>
+      <details open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
         <summary>
           <span id="ledger-heading">Today</span>
           <span className="ledger-summary">
@@ -57,7 +65,13 @@ function DayLedgerComponent({ dayKey, sessions, tasks, interruptions }: DayLedge
               />
             ))}
           </div>
-          <span>{planned > 16 ? "Plan is above 16" : planned > 14 ? "Keep room for overflow" : "12–14 is a full day"}</span>
+          <span>
+            {planned > 16
+              ? "Plan is above 16"
+              : planned > 14
+                ? "Keep room for overflow"
+                : "12–14 is a full day"}
+          </span>
         </div>
         <div className="session-list" role="list" aria-label="Today's session history">
           {today.length === 0 ? (

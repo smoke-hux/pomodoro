@@ -38,14 +38,19 @@ function InterruptionDialogComponent({ open, onClose, onSave }: InterruptionDial
   };
 
   return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
+    <div
+      className="dialog-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
       <section
         className="dialog capture-dialog"
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="capture-title"
-        onMouseDown={(event) => event.stopPropagation()}
       >
         <h2 id="capture-title">What came up?</h2>
         <form

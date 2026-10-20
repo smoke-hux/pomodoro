@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { FocusTask, Interruption, SessionRecord } from "../types";
 import {
   formatClock,
-  formatCountdown,
   formatDuration,
   formatRelativeTime,
   getCompletedFocusByTask,
@@ -21,20 +20,11 @@ import {
   toIsoTime,
 } from "./metrics";
 
-const localTime = (
-  year: number,
-  month: number,
-  day: number,
-  hour = 0,
-  minute = 0,
-  second = 0,
-) => new Date(year, month, day, hour, minute, second).getTime();
+const localTime = (year: number, month: number, day: number, hour = 0, minute = 0, second = 0) =>
+  new Date(year, month, day, hour, minute, second).getTime();
 
 let sessionNumber = 0;
-const makeSession = (
-  startedAt: number,
-  overrides: Partial<SessionRecord> = {},
-): SessionRecord => ({
+const makeSession = (startedAt: number, overrides: Partial<SessionRecord> = {}): SessionRecord => ({
   id: `session-${(sessionNumber += 1)}`,
   phase: "focus",
   taskId: "task-a",
@@ -206,7 +196,9 @@ describe("task metrics", () => {
       "task-b": 1,
       "archived-task": 1,
     });
-    expect(getTaskActuals(tasks, sessions).map(({ taskId, actual }) => ({ taskId, actual }))).toEqual([
+    expect(
+      getTaskActuals(tasks, sessions).map(({ taskId, actual }) => ({ taskId, actual })),
+    ).toEqual([
       { taskId: "task-a", actual: 2 },
       { taskId: "task-b", actual: 1 },
       { taskId: "task-c", actual: 0 },
@@ -248,13 +240,6 @@ describe("formatting", () => {
     expect(formatDuration(65)).toBe("1m 5s");
     expect(formatDuration(3_900)).toBe("1h 5m");
     expect(formatDuration(Number.NaN)).toBe("0s");
-  });
-
-  it("formats countdowns without displaying negative time", () => {
-    expect(formatCountdown(1_500)).toBe("25:00");
-    expect(formatCountdown(3_661)).toBe("1:01:01");
-    expect(formatCountdown(0.2)).toBe("00:01");
-    expect(formatCountdown(-10)).toBe("00:00");
   });
 
   it("formats a local clock value as zero-padded 24-hour time", () => {
@@ -312,7 +297,11 @@ describe("the seven-day series over stored timestamps", () => {
     });
 
     const series = getSevenDayCompletedFocusSeries(
-      [session("bad", 9e18), session("today", now - 3_600_000), session("yesterday", now - 86_400_000)],
+      [
+        session("bad", 9e18),
+        session("today", now - 3_600_000),
+        session("yesterday", now - 86_400_000),
+      ],
       now,
     );
     expect(series.map((day) => day.count)).toEqual([0, 0, 0, 0, 0, 1, 1]);

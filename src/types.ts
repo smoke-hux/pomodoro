@@ -3,22 +3,22 @@ export type TimerStatus = "idle" | "running" | "paused";
 export type SessionOutcome = "completed" | "skipped" | "abandoned";
 export type ThemePreference = "system" | "light" | "dark";
 
+export interface ImportPreview {
+  token: string;
+  fileName: string;
+  tasks: number;
+  sessions: number;
+  interruptions: number;
+  notifications: number;
+}
+
 /**
  * How the remaining time is drawn. Each face answers "how much is left?" in a
  * different way — read, proportion, count, glance, or words — rather than being
  * a decorative skin over the same numerals.
  */
 export type TimerFace =
-  | "digits"
-  | "ring"
-  | "pips"
-  | "bar"
-  | "words"
-  | "analog"
-  | "vessel"
-  | "arc"
-  | "blocks"
-  | "orbit";
+  "digits" | "ring" | "pips" | "bar" | "words" | "analog" | "vessel" | "arc" | "blocks" | "orbit";
 
 export interface DesktopNotification {
   id: string;

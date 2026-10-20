@@ -125,7 +125,9 @@ describe("editing two tasks", () => {
     // The remaining row's menu: a single editor used to be replaced here.
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
 
-    const titles = (screen.getAllByLabelText("Task") as HTMLInputElement[]).map((input) => input.value);
+    const titles = (screen.getAllByLabelText("Task") as HTMLInputElement[]).map(
+      (input) => input.value,
+    );
     expect(titles).toEqual(["Half-typed title", "Review notes"]);
   });
 });
@@ -184,7 +186,9 @@ describe("completed tasks", () => {
       act(() => void vi.advanceTimersByTime(500));
       expect(confirm.getAttribute("aria-disabled")).toBe("false");
       expect(confirm.className).not.toContain("arming");
-      expect(screen.getByRole("status").textContent).toContain("Press again to delete Done last week");
+      expect(screen.getByRole("status").textContent).toContain(
+        "Press again to delete Done last week",
+      );
     } finally {
       vi.useRealTimers();
     }

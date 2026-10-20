@@ -1,6 +1,7 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { Pause, Play, RotateCcw, SkipForward } from "lucide-react";
 import type { FocusTask, Phase, TimerFace as TimerFaceId, TimerState } from "../types";
+import { useCountdown } from "../lib/useCountdown";
 import { TimerFace } from "./TimerFace";
 
 const phaseLabels: Record<Phase, string> = {
@@ -19,6 +20,8 @@ interface TimerPanelProps {
   onReset: () => void;
   onSkip: () => void;
   onAddTask: () => void;
+  /** Ctrl+S raises this counter; reacting to it runs the same skip flow as the button. */
+  skipRequest: number;
 }
 
 function TimerPanelComponent({
@@ -31,10 +34,22 @@ function TimerPanelComponent({
   onReset,
   onSkip,
   onAddTask,
+  skipRequest,
 }: TimerPanelProps) {
+  // The countdown lives here, not in the snapshot. The backend sends a
+  // deadline and this panel counts down to it locally; the snapshot only
+  // changes when something other than the clock does. Owning the tick keeps
+  // the once-a-second render inside this memoised panel.
+  const remainingSeconds = useCountdown(timer);
+
+  const minutesLeft = Math.ceil(remainingSeconds / 60);
+  useEffect(() => {
+    document.title = `${minutesLeft}m · ${timer.phase === "focus" ? "Focus" : "Break"} · ${timer.status} — Pomodoro`;
+  }, [minutesLeft, timer.phase, timer.status]);
+
   const progress =
     timer.durationSeconds > 0
-      ? ((timer.durationSeconds - timer.remainingSeconds) / timer.durationSeconds) * 100
+      ? ((timer.durationSeconds - remainingSeconds) / timer.durationSeconds) * 100
       : 0;
   const needsTask = timer.phase === "focus" && !activeTask;
 
@@ -62,6 +77,20 @@ function TimerPanelComponent({
     setConfirmSkip(false);
     onSkip();
   };
+
+  // Ctrl+S raises this counter. The latest handleSkip goes in a ref so the
+  // effect can depend on just the counter: depending on handleSkip would rerun
+  // it on every confirmSkip change and confirm and skip in the same press.
+  const handleSkipRef = useRef(handleSkip);
+  useEffect(() => {
+    handleSkipRef.current = handleSkip;
+  });
+  const lastSkipRequest = useRef(skipRequest);
+  useEffect(() => {
+    if (skipRequest === lastSkipRequest.current) return;
+    lastSkipRequest.current = skipRequest;
+    handleSkipRef.current();
+  }, [skipRequest]);
 
   // Said and shown from the same string. The label used to be worked out
   // separately, unclamped and blind to the phase: "Round 5 of 4" was announced
@@ -114,7 +143,7 @@ function TimerPanelComponent({
         <TimerFace
           face={face}
           phase={timer.phase}
-          remainingSeconds={timer.remainingSeconds}
+          remainingSeconds={remainingSeconds}
           durationSeconds={timer.durationSeconds}
           phaseLabel={phaseLabels[timer.phase]}
         />
@@ -125,7 +154,7 @@ function TimerPanelComponent({
             aria-label={`${phaseLabels[timer.phase]} progress`}
             aria-valuemin={0}
             aria-valuemax={timer.durationSeconds}
-            aria-valuenow={Math.round(timer.durationSeconds - timer.remainingSeconds)}
+            aria-valuenow={Math.round(timer.durationSeconds - remainingSeconds)}
           >
             <span
               style={{
@@ -154,7 +183,9 @@ function TimerPanelComponent({
             )
           ) : (
             <>
-              <strong>{timer.phase === "longBreak" ? "Take a proper break" : "Step away for a moment"}</strong>
+              <strong>
+                {timer.phase === "longBreak" ? "Take a proper break" : "Step away for a moment"}
+              </strong>
               <span>Look away from the screen, move, and reset.</span>
             </>
           )}
@@ -178,7 +209,7 @@ function TimerPanelComponent({
             className="secondary-control"
             type="button"
             onClick={onReset}
-            disabled={timer.status === "idle" && timer.remainingSeconds === timer.durationSeconds}
+            disabled={timer.status === "idle" && remainingSeconds === timer.durationSeconds}
             title="Reset this interval"
           >
             <RotateCcw aria-hidden="true" size={17} /> Reset
@@ -189,14 +220,15 @@ function TimerPanelComponent({
             onClick={handleSkip}
             title={timer.phase === "focus" ? "End focus without credit" : "Skip this break"}
           >
-            <SkipForward aria-hidden="true" size={17} />{" "}
-            {confirmSkip ? "Discard session?" : "Skip"}
+            <SkipForward aria-hidden="true" size={17} /> {confirmSkip ? "Discard session?" : "Skip"}
           </button>
         </div>
         <p className="shortcut-hint">
           <kbd>Space</kbd> {timer.status === "running" ? "pause" : "start"}
           <span aria-hidden="true">·</span>
           <kbd>Ctrl I</kbd> capture a distraction
+          <span aria-hidden="true">·</span>
+          <kbd>Ctrl S</kbd> skip
         </p>
       </div>
     </section>
@@ -204,9 +236,8 @@ function TimerPanelComponent({
 }
 
 /**
- * Memoised: the window re-renders every second while the timer runs, and this
- * component has nothing to do with the countdown. Its props are stable
- * callbacks and slices of the snapshot, so it only re-renders when something
- * it shows actually changed.
+ * Memoised: this panel owns the countdown and the rest of the window does
+ * not. Its other props are stable callbacks and slices of the snapshot, so
+ * the once-a-second tick re-renders nothing outside this panel.
  */
 export const TimerPanel = memo(TimerPanelComponent);

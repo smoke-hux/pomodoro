@@ -1,0 +1,473 @@
+.sidebar {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) minmax(120px, 26%) minmax(124px, 28%);
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.sidebar-section {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.inbox-section {
+  border-top: 1px solid var(--divider);
+}
+
+.section-bar {
+  display: flex;
+  flex: 0 0 auto;
+  min-width: 0;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px 4px 16px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.section-bar h2 {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+}
+
+.task-list,
+.inbox-list {
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.task-list {
+  flex: 1 1 auto;
+}
+
+.inbox-list {
+  flex: 1 1 auto;
+}
+
+.task-row,
+.inbox-row {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 46px;
+  align-items: stretch;
+  border-bottom: 1px solid var(--divider);
+}
+
+.task-row {
+  grid-template-columns: 38px minmax(0, 1fr) 36px;
+}
+
+.task-row:hover,
+.inbox-row:hover {
+  background: var(--surface-hover);
+}
+
+.task-row.selected {
+  background: var(--surface-selected);
+  box-shadow: inset 3px 0 0 var(--focus);
+}
+
+.task-check,
+.task-select,
+.inbox-text {
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: inherit;
+}
+
+.task-check {
+  display: grid;
+  min-height: 44px;
+  place-items: center;
+  color: var(--text-muted);
+}
+
+.task-check:hover {
+  color: var(--focus);
+}
+
+.task-select {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  text-align: left;
+}
+
+.task-title,
+.completed-title {
+  min-width: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-row.selected .task-title {
+  font-weight: 650;
+}
+
+.task-count {
+  padding-right: 2px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.row-menu {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  place-items: center;
+}
+
+.row-menu > summary {
+  display: grid;
+  width: 34px;
+  min-height: 40px;
+  list-style: none;
+  place-items: center;
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+}
+
+.row-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.row-menu > summary:hover,
+.row-menu[open] > summary {
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+.task-row:has(.row-menu[open]),
+.inbox-row:has(.row-menu[open]) {
+  z-index: 10;
+}
+
+.menu-popover {
+  position: absolute;
+  z-index: 20;
+  top: 40px;
+  right: 4px;
+  display: grid;
+  width: max-content;
+  min-width: 136px;
+  padding: 4px;
+  background: var(--surface-raised);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-menu);
+}
+
+/* Placed against the window by useRowMenus as the menu opens, because the
+   lists scroll and would clip a menu positioned inside its row. */
+.row-menu:not([data-placed]) > .menu-popover {
+  visibility: hidden;
+}
+
+.row-menu[data-placed] > .menu-popover {
+  position: fixed;
+  top: var(--menu-top, auto);
+  right: var(--menu-right, 4px);
+  bottom: var(--menu-bottom, auto);
+}
+
+.menu-popover button {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.menu-popover button:hover {
+  background: var(--surface-hover);
+}
+
+.menu-popover button:last-child {
+  color: var(--danger);
+}
+
+.inbox-menu {
+  min-width: 174px;
+}
+
+.completed-group {
+  flex: 0 0 auto;
+  max-height: 38%;
+  overflow-y: auto;
+  border-top: 1px solid var(--divider);
+}
+
+.completed-groups {
+  flex: 0 0 auto;
+  max-height: 38%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.completed-groups > .completed-group {
+  max-height: none;
+  overflow: visible;
+}
+
+.completed-group > summary {
+  min-height: 40px;
+  padding: 10px 16px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.completed-group .task-row {
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  padding-right: 12px;
+}
+
+.completed-group .task-count {
+  align-self: center;
+}
+
+.completed-group .task-row.completed {
+  grid-template-columns: 38px minmax(0, 1fr) auto 34px;
+  padding-right: 4px;
+}
+
+.row-delete {
+  display: grid;
+  width: 34px;
+  min-height: 40px;
+  padding: 0;
+  place-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+}
+
+.row-delete:hover {
+  background: var(--surface-raised);
+  color: var(--danger);
+}
+
+.completed-group .task-row.completed.confirming {
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  padding-right: 8px;
+}
+
+.row-delete.confirming {
+  width: auto;
+  min-height: 32px;
+  align-self: center;
+  padding: 0 10px;
+  background: var(--danger);
+  color: var(--on-danger);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.row-delete.confirming:hover {
+  background: var(--danger-hover);
+  color: var(--on-danger);
+}
+
+/* After the hover rule, which it ties with on specificity. The button appears
+   under the pointer that just pressed the bin, so it is hovered from its first
+   frame; hover must not make it look ready while presses are being ignored. */
+.row-delete.confirming.arming,
+.row-delete.confirming.arming:hover {
+  background: var(--danger);
+  opacity: 0.55;
+  cursor: default;
+}
+
+.completed-title {
+  align-self: center;
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.inbox-row {
+  grid-template-columns: minmax(0, 1fr) 36px;
+}
+
+.inbox-text {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 4px 8px 16px;
+  text-align: left;
+}
+
+.inbox-text span {
+  min-width: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inbox-text time {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.empty-copy,
+.empty-ledger {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.empty-copy {
+  padding: 16px;
+  overflow-wrap: anywhere;
+}
+
+.empty-task {
+  display: flex;
+  width: 100%;
+  min-height: 48px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--divider);
+  color: var(--text-muted);
+  text-align: left;
+}
+
+.empty-task:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.task-form {
+  flex: 0 0 auto;
+  padding: 12px 16px 14px;
+  background: var(--surface-selected);
+  border-bottom: 1px solid var(--divider);
+}
+
+.task-form > label,
+.capture-dialog form > label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+input,
+select,
+textarea {
+  min-height: 40px;
+  background: var(--surface-raised);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-md);
+}
+
+input,
+textarea {
+  padding: 8px 10px;
+}
+
+select {
+  padding: 7px 32px 7px 10px;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-muted);
+  opacity: 0.78;
+}
+
+.task-form > input {
+  width: 100%;
+}
+
+.task-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.task-form-row > label {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.estimate-stepper {
+  display: grid;
+  grid-template-columns: 32px 32px 32px;
+  min-height: 34px;
+  overflow: hidden;
+  background: var(--surface-raised);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-md);
+}
+
+.estimate-stepper button,
+.estimate-stepper output {
+  display: grid;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0;
+  place-items: center;
+  background: transparent;
+  border: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.estimate-stepper button:hover {
+  background: var(--surface-hover);
+}
+
+.estimate-stepper output {
+  border-right: 1px solid var(--divider);
+  border-left: 1px solid var(--divider);
+}
+
+.form-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.form-hint {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}

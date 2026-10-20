@@ -1,0 +1,113 @@
+.app-shell {
+  display: grid;
+  grid-template-rows: var(--toolbar-height) minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--canvas);
+  color: var(--text);
+}
+
+.app-shell.has-banner {
+  grid-template-rows: var(--toolbar-height) auto minmax(0, 1fr);
+}
+
+.store-banner {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px 8px 16px;
+  background: var(--surface-selected);
+  border-bottom: 1px solid var(--control-border);
+  font-size: 13px;
+}
+
+.store-banner p {
+  min-width: 0;
+  flex: 1 1 auto;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.app-toolbar {
+  position: relative;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: var(--toolbar-height);
+  padding: 4px 10px 4px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--divider);
+}
+
+.brand-mark {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  color: var(--focus);
+}
+
+.app-name {
+  flex: 0 0 auto;
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.toolbar-summary {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.icon-button {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  place-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+}
+
+.icon-button:hover {
+  background: var(--surface-hover);
+  border-color: var(--divider);
+  color: var(--text);
+}
+
+.mobile-only {
+  display: none;
+}
+
+.workspace {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sidebar-wrap {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface);
+  border-right: 1px solid var(--divider);
+}

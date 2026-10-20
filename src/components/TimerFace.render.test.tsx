@@ -24,19 +24,24 @@ function renderFace(face: TimerFaceId, remaining = REMAINING, duration = DURATIO
 }
 
 const ALL_FACES: TimerFaceId[] = [
-  "digits", "ring", "bar", "pips", "words",
-  "analog", "vessel", "arc", "blocks", "orbit",
+  "digits",
+  "ring",
+  "bar",
+  "pips",
+  "words",
+  "analog",
+  "vessel",
+  "arc",
+  "blocks",
+  "orbit",
 ];
 
 describe("accessibility parity", () => {
-  it.each(ALL_FACES)(
-    "%s exposes the same value to assistive tech",
-    (face) => {
-      renderFace(face);
-      // Choosing a face must never cost a screen-reader user information.
-      expect(screen.getByLabelText("15 minutes remaining, Focus")).toBeDefined();
-    },
-  );
+  it.each(ALL_FACES)("%s exposes the same value to assistive tech", (face) => {
+    renderFace(face);
+    // Choosing a face must never cost a screen-reader user information.
+    expect(screen.getByLabelText("15 minutes remaining, Focus")).toBeDefined();
+  });
 
   it("singularises the label at one minute", () => {
     renderFace("ring", 60);
@@ -58,15 +63,14 @@ describe("ring face", () => {
     const circumference = 2 * Math.PI * 44;
     expect(Number(progress?.getAttribute("stroke-dasharray"))).toBeCloseTo(circumference, 3);
     // 40% elapsed.
-    expect(Number(progress?.getAttribute("stroke-dashoffset"))).toBeCloseTo(
-      circumference * 0.4,
-      3,
-    );
+    expect(Number(progress?.getAttribute("stroke-dashoffset"))).toBeCloseTo(circumference * 0.4, 3);
   });
 
   it("keeps the arc within bounds when the timer has run out", () => {
     const { container } = renderFace("ring", 0);
-    const offset = Number(container.querySelector(".ring-progress")?.getAttribute("stroke-dashoffset"));
+    const offset = Number(
+      container.querySelector(".ring-progress")?.getAttribute("stroke-dashoffset"),
+    );
     expect(offset).toBeCloseTo(2 * Math.PI * 44, 3);
   });
 });
@@ -149,9 +153,7 @@ describe("vessel face", () => {
 
   it("empties completely at expiry", () => {
     const { container } = renderFace("vessel", 0);
-    expect(container.querySelector<HTMLElement>(".vessel-fill")?.style.transform).toBe(
-      "scaleY(0)",
-    );
+    expect(container.querySelector<HTMLElement>(".vessel-fill")?.style.transform).toBe("scaleY(0)");
   });
 });
 

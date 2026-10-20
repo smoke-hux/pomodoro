@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
@@ -12,7 +12,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   },
 }));
 
-import App from "./App";
+import App, { PomodoroWorkspace } from "./App";
 import { defaultSnapshot } from "./types";
 import type { AppSnapshot, SessionRecord } from "./types";
 
@@ -63,6 +63,18 @@ describe("when the stored settings could not be read", () => {
 
     await waitFor(() => expect(screen.getByText(/Settings are not available/)).toBeTruthy());
     expect(invoke).not.toHaveBeenCalledWith("update_settings", expect.anything());
+  });
+
+  it("still lets Escape dismiss a dialog opened from the toolbar", async () => {
+    render(<App />);
+    const toolbar = (await screen.findByRole("button", { name: "Open settings" })).closest(
+      "header",
+    )!;
+    fireEvent.click(within(toolbar).getByRole("button", { name: "Capture an interruption" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });
 
@@ -132,7 +144,9 @@ describe("sound", () => {
     try {
       render(<App />);
       await screen.findByRole("button", { name: "Open settings" });
-      await act(async () => broadcast({ ...defaultSnapshot, sessions: [session("just-finished")] }));
+      await act(async () =>
+        broadcast({ ...defaultSnapshot, sessions: [session("just-finished")] }),
+      );
       expect(AudioContext).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
@@ -235,7 +249,8 @@ describe("start-up", () => {
     const order: string[] = [];
     const previous = broadcast;
     invoke.mockImplementation((command: string) => {
-      if (command === "get_snapshot") order.push(broadcast === previous ? "snapshot-first" : "listening-first");
+      if (command === "get_snapshot")
+        order.push(broadcast === previous ? "snapshot-first" : "listening-first");
       return Promise.resolve(command === "get_snapshot" ? defaultSnapshot : undefined);
     });
     render(<App />);
@@ -256,7 +271,12 @@ describe("start-up", () => {
 
     const newer: AppSnapshot = {
       ...defaultSnapshot,
-      timer: { ...defaultSnapshot.timer, phase: "shortBreak", durationSeconds: 300, remainingSeconds: 300 },
+      timer: {
+        ...defaultSnapshot.timer,
+        phase: "shortBreak",
+        durationSeconds: 300,
+        remainingSeconds: 300,
+      },
     };
     await act(async () => broadcast(newer));
     await act(async () => deliver(defaultSnapshot)); // older: still says focus
@@ -290,7 +310,198 @@ describe("the Space shortcut", () => {
   });
 });
 
+describe("the Ctrl+S shortcut", () => {
+  function skips() {
+    return invoke.mock.calls.filter(([command]) => command === "skip_phase").length;
+  }
+
+  function withTimer(timer: Partial<(typeof defaultSnapshot)["timer"]>): AppSnapshot {
+    return { ...defaultSnapshot, timer: { ...defaultSnapshot.timer, ...timer } };
+  }
+
+  it("ignores presses during loading instead of skipping after the first snapshot", async () => {
+    let deliver: (snapshot: AppSnapshot) => void = () => {};
+    invoke.mockImplementation((command: string) =>
+      command === "get_snapshot"
+        ? new Promise<AppSnapshot>((resolve) => (deliver = resolve))
+        : Promise.resolve(),
+    );
+    render(<App />);
+    expect(screen.getByText("Opening Pomodoro…")).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: "s", ctrlKey: true });
+    fireEvent.keyDown(document.body, { code: "Space", key: " " });
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("get_snapshot"));
+
+    await act(async () => deliver(defaultSnapshot));
+    expect(skips()).toBe(0);
+    expect(invoke).not.toHaveBeenCalledWith("toggle_timer", {});
+
+    fireEvent.keyDown(document.body, { key: "s", ctrlKey: true });
+    expect(skips()).toBe(1);
+  });
+
+  it("does not act on placeholder data after a connection failure", async () => {
+    invoke.mockImplementation((command: string) =>
+      command === "get_snapshot" ? Promise.reject("unavailable") : Promise.resolve(),
+    );
+    render(<App />);
+    await screen.findByRole("button", { name: "Open settings" });
+    fireEvent.keyDown(document.body, { key: "s", ctrlKey: true });
+    expect(skips()).toBe(0);
+  });
+
+  it("leaves an open row menu in control until Escape dismisses it", async () => {
+    const snapshot: AppSnapshot = {
+      ...withTimer({ status: "paused" }),
+      tasks: [
+        {
+          id: "task",
+          title: "Write the report",
+          estimate: 1,
+          completedPomodoros: 0,
+          done: false,
+          createdAt: Date.now(),
+          completedAt: null,
+        },
+      ],
+    };
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === "get_snapshot" ? snapshot : undefined),
+    );
+    render(<App />);
+    const menu = (await screen.findByLabelText("More actions for Write the report")).closest(
+      "details",
+    )!;
+    menu.open = true;
+
+    fireEvent.keyDown(document.body, { key: "s", ctrlKey: true });
+    expect(skips()).toBe(0);
+    expect(screen.queryByText("Discard session?")).toBeNull();
+    expect(menu.open).toBe(true);
+
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "s", ctrlKey: true });
+    expect(menu.open).toBe(false);
+    expect(screen.getByText("Discard session?")).toBeTruthy();
+    expect(skips()).toBe(0);
+  });
+
+  it("skips a running break in one press", async () => {
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(
+        command === "get_snapshot"
+          ? withTimer({
+              phase: "shortBreak",
+              status: "running",
+              durationSeconds: 300,
+              remainingSeconds: 300,
+            })
+          : undefined,
+      ),
+    );
+    render(<App />);
+    await screen.findByRole("button", { name: "Open settings" });
+
+    fireEvent.keyDown(document.body, { key: "s", ctrlKey: true });
+
+    expect(skips()).toBe(1);
+  });
+
+  it("asks once before discarding a running focus, then skips on the second press", async () => {
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(
+        command === "get_snapshot"
+          ? withTimer({ status: "running", endsAt: Date.now() + 60_000 })
+          : undefined,
+      ),
+    );
+    render(<App />);
+    await screen.findByRole("button", { name: "Open settings" });
+
+    fireEvent.keyDown(document.body, { key: "s", ctrlKey: true });
+    expect(skips()).toBe(0);
+    expect(screen.getByText("Discard session?")).toBeTruthy();
+
+    fireEvent.keyDown(document.body, { key: "s", ctrlKey: true });
+    expect(skips()).toBe(1);
+  });
+
+  it("acts on the press, not on every repeat of a held key", async () => {
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(
+        command === "get_snapshot"
+          ? withTimer({
+              phase: "shortBreak",
+              status: "running",
+              durationSeconds: 300,
+              remainingSeconds: 300,
+            })
+          : undefined,
+      ),
+    );
+    render(<App />);
+    await screen.findByRole("button", { name: "Open settings" });
+
+    fireEvent.keyDown(document.body, { key: "s", ctrlKey: true });
+    for (let repeat = 0; repeat < 20; repeat += 1) {
+      fireEvent.keyDown(document.body, { key: "s", ctrlKey: true, repeat: true });
+    }
+
+    expect(skips()).toBe(1);
+  });
+
+  it("needs the Ctrl key, and leaves a text field alone", async () => {
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === "get_snapshot" ? defaultSnapshot : undefined),
+    );
+    render(<App />);
+    await screen.findByRole("button", { name: "Open settings" });
+
+    fireEvent.keyDown(document.body, { key: "s" });
+    expect(skips()).toBe(0);
+
+    // Ctrl+N opens the task composer with its title field focused.
+    fireEvent.keyDown(document.body, { key: "n", ctrlKey: true });
+    const title = await screen.findByLabelText("Task");
+    fireEvent.keyDown(title, { key: "s", ctrlKey: true });
+    expect(skips()).toBe(0);
+  });
+});
+
 describe("an open dialog", () => {
+  it("ignores Escape during an import and closes after the import succeeds", async () => {
+    let finishImport: () => void = () => {};
+    invoke.mockImplementation((command: string) => {
+      if (command === "get_snapshot") return Promise.resolve(defaultSnapshot);
+      if (command === "preview_import")
+        return Promise.resolve({
+          token: "pending-import",
+          fileName: "backup.json",
+          tasks: 1,
+          sessions: 0,
+          interruptions: 0,
+          notifications: 0,
+        });
+      if (command === "confirm_import")
+        return new Promise<void>((resolve) => (finishImport = resolve));
+      return Promise.resolve();
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Open settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose import" }));
+    fireEvent.click(await screen.findByLabelText("Replace my data with this file"));
+    fireEvent.click(screen.getByRole("button", { name: "Import and replace" }));
+    expect(invoke).toHaveBeenCalledWith("confirm_import", { token: "pending-import" });
+
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(invoke).not.toHaveBeenCalledWith("cancel_import", { token: "pending-import" });
+
+    await act(async () => finishImport());
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(invoke).not.toHaveBeenCalledWith("cancel_import", { token: "pending-import" });
+  });
+
   it("makes everything behind it inert, so a focused control there cannot be pressed", async () => {
     invoke.mockImplementation((command: string) =>
       Promise.resolve(command === "get_snapshot" ? defaultSnapshot : undefined),
@@ -308,5 +519,27 @@ describe("an open dialog", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(toolbar().hasAttribute("inert")).toBe(false);
     expect(workspace().hasAttribute("inert")).toBe(false);
+  });
+});
+
+describe("the timer-first workspace", () => {
+  it("puts the timer before the plan in keyboard order and keeps day review expandable", async () => {
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === "get_snapshot" ? defaultSnapshot : undefined),
+    );
+    const { container } = render(<PomodoroWorkspace layout="timer-first" />);
+    await screen.findByRole("button", { name: "Open settings" });
+    const workspace = container.querySelector(".workspace")!;
+    expect(workspace.children[0].classList.contains("focus-column")).toBe(true);
+    expect(workspace.children[1].classList.contains("sidebar-wrap")).toBe(true);
+    expect(workspace.children[2].classList.contains("ledger")).toBe(true);
+    expect(container.querySelector<HTMLDetailsElement>(".ledger details")?.open).toBe(false);
+
+    fireEvent.keyDown(document.body, { key: "n", ctrlKey: true });
+    expect(await screen.findByLabelText("Task")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

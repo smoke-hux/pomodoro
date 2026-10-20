@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import { configDefaults } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
@@ -8,6 +9,18 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     host: "127.0.0.1",
+    // Cargo emits embedded HTML during a build; it is not a frontend edit.
+    watch: {
+      ignored: [
+        "**/src-tauri/**",
+        "**/.playwright-mcp/**",
+        "**/.claude-design/**",
+        "**/test-artifacts/**",
+      ],
+    },
+  },
+  test: {
+    exclude: [...configDefaults.exclude, "**/.claude-design/**"],
   },
   envPrefix: ["VITE_", "TAURI_"],
   build: {

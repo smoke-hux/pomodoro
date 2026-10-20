@@ -2,11 +2,25 @@ import { useEffect } from "react";
 import type { RefObject } from "react";
 
 const FOCUSABLE =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
+  'a[href], button, input:not([type="hidden"]), select, textarea, summary, [tabindex]';
+
+function available(element: HTMLElement): boolean {
+  // :disabled includes controls disabled by a parent fieldset, whereas the
+  // [disabled] attribute only describes the control itself.
+  if (element.matches(':disabled, input[type="hidden"]')) return false;
+  if (element.closest("[hidden], [inert], .visually-hidden")) return false;
+  const visibility = window.getComputedStyle(element).visibility;
+  if (visibility === "hidden" || visibility === "collapse") return false;
+  // A child's own display value does not tell us that its parent is hidden.
+  for (let ancestor: HTMLElement | null = element; ancestor; ancestor = ancestor.parentElement) {
+    if (window.getComputedStyle(ancestor).display === "none") return false;
+  }
+  return true;
+}
 
 function focusableIn(container: HTMLElement): HTMLElement[] {
   return [...container.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
-    (element) => !element.closest("[hidden]") && !element.closest(".visually-hidden"),
+    (element) => element.tabIndex >= 0 && available(element),
   );
 }
 
@@ -34,10 +48,22 @@ export function useModalFocus(
     if (!open) return;
     const container = dialog.current;
     if (!container) return;
+    // Give an empty or temporarily disabled dialog a fallback focus target.
+    // A negative index permits programmatic focus without adding a Tab stop.
+    const addedTabIndex = !container.hasAttribute("tabindex");
+    if (addedTabIndex) container.tabIndex = -1;
 
     const frame = requestAnimationFrame(() => {
       if (container.contains(document.activeElement)) return;
-      (initial?.current ?? focusableIn(container)[0] ?? container).focus();
+      const preferred = initial?.current;
+      const target =
+        preferred &&
+        container.contains(preferred) &&
+        preferred.matches(FOCUSABLE) &&
+        available(preferred)
+          ? preferred
+          : (focusableIn(container)[0] ?? container);
+      target.focus();
     });
 
     const onKeyDown = (event: KeyboardEvent) => {
@@ -45,14 +71,15 @@ export function useModalFocus(
       const items = focusableIn(container);
       if (items.length === 0) {
         event.preventDefault();
+        container.focus();
         return;
       }
       const first = items[0];
       const last = items[items.length - 1];
       const active = document.activeElement;
-      if (!container.contains(active)) {
+      if (!container.contains(active) || active === container) {
         event.preventDefault();
-        first.focus();
+        (event.shiftKey ? last : first).focus();
       } else if (event.shiftKey && active === first) {
         event.preventDefault();
         last.focus();
@@ -65,6 +92,9 @@ export function useModalFocus(
     return () => {
       cancelAnimationFrame(frame);
       document.removeEventListener("keydown", onKeyDown);
+      if (addedTabIndex && container.getAttribute("tabindex") === "-1") {
+        container.removeAttribute("tabindex");
+      }
     };
   }, [open, dialog, initial]);
 }

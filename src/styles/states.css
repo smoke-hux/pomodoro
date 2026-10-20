@@ -1,0 +1,40 @@
+/* ── Paused state ───────────────────────────────────────────────────────────
+   A paused timer used to differ from a running one only by the word on the
+   primary button. Glanced at from across a desk, a stalled session read as a
+   working one. The clock now settles into a quiet muted state and the progress
+   fill goes flat, so the state is legible without perpetual motion. */
+.status-paused .timer-face {
+  color: var(--text-muted);
+  opacity: 0.72;
+}
+
+.status-paused .progress-track > span {
+  background: var(--text-muted);
+}
+
+/* ── Destructive confirmation ───────────────────────────────────────────────
+   Second press of Skip during focus. Carries danger colour plus changed label,
+   so the shift does not rely on colour alone. */
+.secondary-control.confirming {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--on-danger);
+}
+
+.secondary-control.confirming:hover:not(:disabled) {
+  background: var(--danger-hover);
+  border-color: var(--danger-hover);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-paused .timer-face {
+    animation: none;
+    opacity: 0.72;
+  }
+}
+
+@media (forced-colors: active) {
+  .secondary-control.confirming {
+    border-width: 2px;
+  }
+}

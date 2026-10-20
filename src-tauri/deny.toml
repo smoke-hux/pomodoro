@@ -1,0 +1,29 @@
+# Audit the full dependency graph, including optional platform dependencies.
+[licenses]
+confidence-threshold = 0.95
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "CC0-1.0",
+  "ISC",
+  "MIT",
+  "Unicode-3.0",
+  "Zlib",
+]
+
+# Tauri's existing HTML/CSS and platform-directory dependency chain. Keep
+# these exceptions scoped so a new MPL dependency receives explicit review.
+exceptions = [
+  { crate = "cssparser", allow = ["MPL-2.0"] },
+  { crate = "cssparser-macros", allow = ["MPL-2.0"] },
+  { crate = "dtoa-short", allow = ["MPL-2.0"] },
+  { crate = "option-ext", allow = ["MPL-2.0"] },
+  { crate = "selectors", allow = ["MPL-2.0"] },
+]
+
+# The application is distributed as a desktop package, not a published crate.
+# Its license is a repository-owner decision; this check covers dependencies.
+[licenses.private]
+ignore = true

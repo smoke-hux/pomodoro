@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { DayLedger } from "./DayLedger";
 import { getLocalDateKey } from "../lib/metrics";
@@ -29,6 +29,24 @@ function renderLedger(sessions: SessionRecord[]) {
 }
 
 describe("the day ledger", () => {
+  it("can start collapsed and still expand to show every retained session", () => {
+    const { container } = render(
+      <DayLedger
+        dayKey={getLocalDateKey(NOW)}
+        sessions={[focus("a", NOW - 60_000, 25)]}
+        tasks={[]}
+        interruptions={[]}
+        defaultExpanded={false}
+      />,
+    );
+    const details = container.querySelector("details")!;
+    expect(details.open).toBe(false);
+    expect(screen.getByText(/1 focus · 1m/)).toBeTruthy();
+    fireEvent.click(container.querySelector("summary")!);
+    expect(details.open).toBe(true);
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+  });
+
   it("shows a total that is the sum of the rows under it", () => {
     // 25 min 29 s each: two rows of 25m. Rounding the summed seconds said 51.
     renderLedger([focus("a", NOW - 7_200_000, 1_529), focus("b", NOW - 3_600_000, 1_529)]);

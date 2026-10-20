@@ -1,0 +1,150 @@
+.ledger {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface);
+  border-top: 1px solid var(--divider);
+}
+
+.ledger details {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.ledger summary {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: auto minmax(0, 1fr) 32px;
+  min-height: 48px;
+  align-items: center;
+  gap: 16px;
+  padding: 0 20px 0 28px;
+  list-style: none;
+  border-bottom: 1px solid var(--divider);
+  font-weight: 650;
+}
+
+.ledger summary::-webkit-details-marker {
+  display: none;
+}
+
+.ledger-summary {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-chevron {
+  justify-self: end;
+  color: var(--text-muted);
+  transition: rotate 140ms ease;
+}
+
+.ledger details:not([open]) .ledger-chevron {
+  rotate: -90deg;
+}
+
+.capacity-line {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: auto minmax(80px, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 38px;
+  padding: 6px 28px;
+  border-bottom: 1px solid var(--divider);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.capacity-ticks {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(3px, 1fr);
+  gap: 3px;
+  height: 8px;
+}
+
+.capacity-ticks i {
+  min-width: 3px;
+  background: var(--divider);
+  border-radius: 1px;
+}
+
+.capacity-ticks i.done {
+  background: var(--focus);
+}
+
+.capacity-ticks i.over {
+  border: 1px solid var(--control-border);
+  background: transparent;
+}
+
+.session-list {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.session-row {
+  display: grid;
+  grid-template-columns: 74px minmax(120px, 1fr) 92px 42px;
+  min-width: 0;
+  min-height: 36px;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 28px;
+  border-bottom: 1px solid var(--divider);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-row:hover {
+  background: var(--surface-hover);
+}
+
+.session-row time,
+.session-row > span:last-child {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.session-row > span:last-child {
+  text-align: right;
+}
+
+.session-kind {
+  min-width: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-outcome {
+  color: var(--text-muted);
+  text-transform: capitalize;
+}
+
+.outcome-completed {
+  color: var(--break);
+}
+
+.outcome-abandoned {
+  color: var(--danger);
+}
+
+.empty-ledger {
+  padding: 14px 28px;
+}

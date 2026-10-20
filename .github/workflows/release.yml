@@ -43,41 +43,38 @@ jobs:
     # can be launched from a tag, and building that tag again would fail on
     # the release that already exists.
     if: github.event_name == 'push'
-    # The oldest release still supported: glibc and WebKit symbols resolve
-    # forwards, so a package built here also installs on 24.04 and newer.
-    # GitHub began deprecating this image on 2026-09-17 and removes it on
-    # 2027-04-17, with brownouts before then; a brownout fails this job
-    # loudly and stops the publish rather than republishing silently. When
-    # it goes, either build in a `container: ubuntu:22.04` on a supported
-    # runner, which pins the build glibc independently of the image, or move
-    # to ubuntu-24.04 and drop the 22.04 claim from the README and the
-    # repository's own page.
-    runs-on: ubuntu-22.04
+    # Keep the oldest supported glibc/WebKit baseline independently of the
+    # deprecated 22.04 hosted runner. Newer LTS installations are checked below.
+    runs-on: ubuntu-26.04
+    container: ubuntu:22.04
+    defaults:
+      run:
+        shell: bash
     steps:
-      - uses: actions/checkout@v5
+      # checkout and the other Node-based actions need these even in a
+      # minimal container, before the repository setup script is available.
+      - name: Bootstrap build container
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
+            ca-certificates git libstdc++6
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Install Tauri system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y \
-            libwebkit2gtk-4.1-dev \
-            libjavascriptcoregtk-4.1-dev \
-            libsoup-3.0-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf
+        run: bash scripts/setup-linux.sh --install
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           workspaces: src-tauri
+          key: ubuntu-22.04-package
 
       - run: npm ci
 
@@ -107,21 +104,47 @@ jobs:
       # Tauri names the file after the product ("Pomodoro_0.1.0_amd64.deb");
       # the repository builder renames it to the Debian convention.
       - name: Upload the package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: deb
           path: src-tauri/target/release/bundle/deb/*.deb
           if-no-files-found: error
 
-  release:
-    name: GitHub release
+  validate-package:
+    name: Install package (${{ matrix.os }})
     needs: package
     if: github.event_name == 'push'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: deb
+          path: deb
+      - name: Verify runtime dependencies on the target LTS
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ./deb/*.deb
+          test -x /usr/bin/pomodoro
+          ldd /usr/bin/pomodoro > linked-libraries.txt
+          cat linked-libraries.txt
+          if grep -q 'not found' linked-libraries.txt; then
+            echo '::error::the package has unresolved runtime libraries'
+            exit 1
+          fi
+
+  release:
+    name: GitHub release
+    needs: [package, validate-package]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: deb
           path: deb
@@ -159,13 +182,13 @@ jobs:
 
   publish:
     name: Publish apt repository
-    # Both jobs, not just the release: `needs.*` covers only direct needs,
+    # All checks, not just the release: `needs.*` covers only direct needs,
     # and a failed package leaves the release *skipped*, which would let a
     # publish through for a tag that never produced a package. `!cancelled()`
     # rather than `always()`, which also runs on a cancelled run.
-    needs: [package, release]
+    needs: [package, validate-package, release]
     if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # One publish at a time across the whole repository. Losing a queued one
     # is harmless here: every publish rebuilds from all releases, so the one
     # that runs is complete.
@@ -176,7 +199,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # apt-ftparchive, which builds the indexes. It is not part of the
       # runner image's declared toolset, so it is installed rather than
@@ -258,11 +281,11 @@ jobs:
           [ "${#debs[@]}" -gt 0 ] || { echo "::error::no packages to publish"; exit 1; }
           scripts/build-apt-repo.sh site "${debs[@]}"
 
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
           path: site
 
       - id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

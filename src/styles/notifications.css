@@ -1,0 +1,338 @@
+/* ── Notification triage ────────────────────────────────────────────────────
+   A third sidebar section, filed under the interruption inbox. It reuses the
+   task-row skeleton — check, content, overflow menu — so a captured
+   notification reads as one more thing on the list rather than an alert.
+   Urgency stays plain text so metadata remains useful without badge clutter. */
+.sidebar.captures-quiet {
+  grid-template-rows: minmax(0, 1fr) minmax(144px, 34%) auto;
+}
+
+.notice-section {
+  border-top: 1px solid var(--divider);
+}
+
+.section-count {
+  flex: 0 0 auto;
+  margin-right: auto;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+
+.notice-list {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.notice-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) 36px;
+  min-width: 0;
+  align-items: stretch;
+  border-bottom: 1px solid var(--divider);
+}
+
+.notice-row:hover {
+  background: var(--surface-hover);
+}
+
+.notice-row:has(.row-menu[open]) {
+  z-index: 10;
+}
+
+.notice-check {
+  display: grid;
+  min-width: 0;
+  padding: 11px 0 0;
+  align-content: start;
+  justify-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: var(--text-muted);
+}
+
+.notice-check:hover {
+  color: var(--focus);
+}
+
+.notice-content {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  padding: 9px 4px 10px 0;
+}
+
+.notice-content > p {
+  margin: 0;
+  min-width: 0;
+}
+
+.notice-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.notice-app {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notice-meta time {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.notice-urgency {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.notice-urgency.urgent {
+  color: var(--focus);
+  font-weight: 650;
+}
+
+.notice-during {
+  flex: 0 0 auto;
+  font-style: italic;
+  white-space: nowrap;
+}
+
+.notice-summary {
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notice-body {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+/* Once triaged the row has been dealt with, so the message text folds away.
+   Less to read, and less private text left sitting on screen. */
+.notice-row.triaged .notice-summary {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.notice-row.triaged .notice-body {
+  display: none;
+}
+
+.notice-menu {
+  min-width: 186px;
+}
+
+.notice-menu.confirming {
+  width: 214px;
+  min-width: 0;
+}
+
+.menu-note {
+  margin: 0;
+  padding: 6px 9px 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.notice-group > summary {
+  min-height: 40px;
+  padding: 10px 16px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* ── Notification filter controls ─────────────────────────────────────────── */
+.fieldset-note {
+  margin: 0 0 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.capture-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  background: var(--surface-hover);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+/* The icon travels with the words: colour alone never carries the warning. */
+.capture-status.warning {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.capture-status svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.notice-list .capture-status {
+  margin: 8px 16px;
+}
+
+.setting-disabled {
+  opacity: 0.58;
+}
+
+.app-list {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  padding: 10px 0;
+}
+
+.app-list > label {
+  font-weight: 600;
+}
+
+.app-list > small {
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.app-list-entry {
+  display: flex;
+  min-width: 0;
+  gap: 8px;
+}
+
+.app-list-entry input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.app-list-entry .secondary-control {
+  flex: 0 0 auto;
+}
+
+.app-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.app-chips li {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 30px;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 3px 2px 10px;
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+
+.app-chips li > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.app-chips li > button {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  padding: 0;
+  place-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+}
+
+.app-chips li > button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--danger);
+}
+
+@media (max-width: 479px) {
+  .app-list-entry {
+    flex-wrap: wrap;
+  }
+
+  .app-list-entry .secondary-control {
+    width: 100%;
+  }
+}
+
+/* The sidebar loses a whole section's worth of height on a short window. The
+   notification list keeps a workable minimum by giving ground to the two
+   sections above it rather than collapsing to a scrollbar. */
+@media (max-height: 619px) {
+  .sidebar {
+    grid-template-rows: minmax(0, 1fr) minmax(104px, 24%) minmax(112px, 26%);
+  }
+}
+
+@media (forced-colors: active) {
+  .notice-urgency i {
+    forced-color-adjust: none;
+    border-color: CanvasText;
+  }
+
+  .notice-urgency.normal i,
+  .notice-urgency.urgent i {
+    background: CanvasText;
+    border-color: CanvasText;
+  }
+
+  .notice-urgency.urgent {
+    text-decoration: underline;
+  }
+
+  .section-count,
+  .notice-during,
+  .app-chips li {
+    border-color: ButtonBorder;
+  }
+}

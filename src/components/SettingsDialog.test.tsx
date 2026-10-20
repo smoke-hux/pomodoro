@@ -1,9 +1,21 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsDialog } from "./SettingsDialog";
+import { api } from "../lib/api";
 import { defaultSnapshot } from "../types";
 import type { CaptureStatus, Settings } from "../types";
+
+vi.mock("../lib/api", () => ({
+  api: {
+    exportData: vi.fn(),
+    exportSessionsCsv: vi.fn(),
+    previewImport: vi.fn(),
+    confirmImport: vi.fn(),
+    cancelImport: vi.fn(),
+    openDataLocation: vi.fn(),
+  },
+}));
 
 afterEach(cleanup);
 
@@ -280,6 +292,12 @@ describe("saving", () => {
 });
 
 describe("keyboard", () => {
+  it("lists the shortcut for skipping an interval", () => {
+    renderDialog();
+    const shortcut = screen.getByText("Ctrl S");
+    expect(shortcut.closest("div")?.textContent).toContain("Skip interval");
+  });
+
   it("takes focus when it opens, so keys no longer reach what is behind it", async () => {
     const behind = document.createElement("button");
     document.body.append(behind);
@@ -302,6 +320,95 @@ describe("keyboard", () => {
 
     fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(save);
+  });
+});
+
+describe("data transfer close guards", () => {
+  beforeEach(() => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    vi.resetAllMocks();
+    vi.mocked(api.cancelImport).mockResolvedValue();
+    vi.mocked(api.previewImport).mockResolvedValue({
+      token: "chosen-file",
+      fileName: "backup.json",
+      tasks: 3,
+      sessions: 12,
+      interruptions: 2,
+      notifications: 4,
+    });
+  });
+  afterEach(() => Reflect.deleteProperty(window, "__TAURI_INTERNALS__"));
+
+  async function beginImport() {
+    fireEvent.click(screen.getByRole("button", { name: "Choose import" }));
+    await screen.findByRole("heading", { name: "Import backup.json" });
+    fireEvent.click(screen.getByLabelText("Replace my data with this file"));
+    fireEvent.click(screen.getByRole("button", { name: "Import and replace" }));
+  }
+
+  it("blocks backdrop, header, Cancel and form submission until an import finishes", async () => {
+    let finish!: () => void;
+    vi.mocked(api.confirmImport).mockImplementation(
+      () => new Promise((resolve) => (finish = resolve)),
+    );
+    const onBusyChange = vi.fn();
+    const { props } = renderDialog({ onBusyChange });
+    await beginImport();
+
+    const close = screen.getByRole("button", { name: "Close settings" });
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    const save = screen.getByRole("button", { name: "Save settings" });
+    expect((close as HTMLButtonElement).disabled).toBe(true);
+    expect((cancel as HTMLButtonElement).disabled).toBe(true);
+    expect((save as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(close);
+    fireEvent.click(cancel);
+    fireEvent.mouseDown(screen.getByRole("dialog").parentElement!);
+    fireEvent.submit(save.closest("form")!);
+
+    expect(props.onClose).not.toHaveBeenCalled();
+    expect(props.onSave).not.toHaveBeenCalled();
+    expect(api.cancelImport).not.toHaveBeenCalled();
+    expect(onBusyChange).toHaveBeenLastCalledWith(true);
+
+    await act(async () => finish());
+    await waitFor(() => expect(props.onClose).toHaveBeenCalledOnce());
+    expect(onBusyChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("restores dismissal and keeps the preview when an import fails", async () => {
+    let fail!: (reason: string) => void;
+    vi.mocked(api.confirmImport).mockImplementation(
+      () => new Promise((_, reject) => (fail = reject)),
+    );
+    const { props } = renderDialog();
+    await beginImport();
+    await act(async () => fail("The recovery copy could not be saved."));
+
+    expect((await screen.findByRole("alert")).textContent).toContain("could not be saved");
+    expect(screen.getByRole("heading", { name: "Import backup.json" })).toBeTruthy();
+    expect(props.onClose).not.toHaveBeenCalled();
+    const close = screen.getByRole("button", { name: "Close settings" });
+    expect((close as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(close);
+    expect(props.onClose).toHaveBeenCalledOnce();
+  });
+
+  it("keeps settings open if an earlier save returns during a data transfer", async () => {
+    let finishSave!: (saved: boolean) => void;
+    let finishImport!: () => void;
+    const onSave = vi.fn(() => new Promise<boolean>((resolve) => (finishSave = resolve)));
+    vi.mocked(api.confirmImport).mockImplementation(
+      () => new Promise((resolve) => (finishImport = resolve)),
+    );
+    const { props } = renderDialog({ onSave });
+    fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
+    await beginImport();
+    await act(async () => finishSave(true));
+
+    expect(props.onClose).not.toHaveBeenCalled();
+    await act(async () => finishImport());
+    await waitFor(() => expect(props.onClose).toHaveBeenCalledOnce());
   });
 });
 

@@ -1,16 +1,18 @@
 # Pomodoro
 
-A local-first focus timer for Ubuntu, built on the Pomodoro Technique: work in focused intervals, take a short break after each one, and a longer break after four. It lives in the system tray, keeps a plan and a record of the day, catches the things that interrupt you so you can deal with them afterwards, and tells you — with your desktop's own sound and a notification — when an interval is over.
+A local-first focus timer for Ubuntu, built with Tauri, Rust, React and TypeScript. Plan your tasks, work in focused intervals, take regular breaks, and review the day's sessions and interruptions. Desktop sounds and notifications announce interval changes; an available system tray keeps the timer running with the window hidden.
 
-It is a standalone desktop app. There is no account, no cloud, no sync and no network access at all: everything it knows is in one file in your home directory.
+It is a standalone desktop app. There is no account, no cloud, no sync and no network access at all. Active data lives in one JSON file in your home directory, with local recovery copies for imports and storage upgrades; you can also export it yourself.
+
+[Install](#install-on-ubuntu) · [Ubuntu compatibility](#ubuntu-compatibility) · [Develop](#develop) · [Testing](docs/testing.md) · [Architecture](docs/architecture.md) · [Releasing](#releasing)
 
 ## What it does
 
-**The timer.** A 25-minute focus, a 5-minute short break and a 15-minute long break after four rounds, all adjustable. Breaks can start by themselves when a focus ends, and the next focus can start by itself when a break ends. The deadline is an absolute moment, not a count of ticks, so an interval ends on time whether the window was minimised, the screen was locked or the laptop was asleep. Seven ways of showing the time left — plain digits, a ring, pips, a bar, words, an analogue face, a vessel that empties — are under Settings → Appearance.
+**The timer.** A 25-minute focus, a 5-minute short break and a 15-minute long break after four rounds, all adjustable. Breaks can start by themselves when a focus ends, and the next focus can start by itself when a break ends. The backend uses an absolute deadline to reconcile the interval after minimising, screen locking or suspend. The visible countdown stops scheduling updates while hidden and catches up when the window returns. Ten timer faces — digits, ring, arc, analog, orbit, bar, blocks, pips, vessel and words — are under Settings → Appearance.
 
-**Tasks.** Each task carries an estimate of how many focus sessions it needs and a count of how many it has had; a focus session credits the task it was started for. Tasks can be edited and deleted from their ⋯ menu, ticked off, reopened, and are grouped into *Completed today* and *Completed earlier*. Estimating more than four sessions gets a gentle suggestion to split the work. A focus interval cannot start without a task selected, so every session is attributed to something.
+**Tasks.** Each task carries an estimate of how many focus sessions it needs and a count of how many it has had; a focus session credits the task it was started for. Tasks can be edited and deleted from their ⋯ menu, ticked off, reopened, and are grouped into _Completed today_ and _Completed earlier_. Estimating more than four sessions gets a gentle suggestion to split the work. A focus interval cannot start without a task selected, so every session is attributed to something.
 
-**Interruptions.** Ctrl+I opens a one-line capture for whatever just came up — an email to send, a thought, a knock at the door — without touching the timer. Each note is tagged *internal* or *external* and lands in the interruption inbox for after the interval, where it can be marked handled, turned into a task, or deleted.
+**Interruptions.** Ctrl+I opens a one-line capture for whatever just came up — an email to send, a thought, a knock at the door — without touching the timer. Each note is tagged _internal_ or _external_ and lands in the interruption inbox for after the interval, where it can be marked handled, turned into a task, or deleted.
 
 **Desktop notification capture.** Optionally, Pomodoro watches the desktop notification service and files a copy of what other applications send, so that a message which arrived mid-focus can be read afterwards instead of during. Off by default; see [Desktop notification capture](#desktop-notification-capture).
 
@@ -20,7 +22,7 @@ It is a standalone desktop app. There is no account, no cloud, no sync and no ne
 
 **Sound and notifications.** When an interval runs out, Pomodoro plays your sound theme's "alarm clock elapsed" sound and shows a notification; when you tick a task off, it plays the theme's short "complete" chime and shows a notification naming the task. Both work with the window closed to the tray. See [Sound and notifications](#sound-and-notifications).
 
-**The tray.** Closing the window hides it; the tray menu shows it again, starts, pauses or resumes the timer — the item says which — skips the current interval, or quits. Only one copy of Pomodoro runs at a time; launching it again brings the existing window forward.
+**The tray.** On a desktop with an active AppIndicator tray host, closing the window hides it; the tray menu shows it again, starts, pauses or resumes the timer — the item says which — skips the current interval, or quits. If the tray is unavailable, closing exits safely, pauses the timer and restores desktop banners. Only one copy of Pomodoro runs at a time; launching it again shows the existing window.
 
 **Light and dark.** Follows the desktop's appearance setting live, or stays on the theme you pick, from the toolbar button or Settings → Appearance. Keyboard navigation throughout, high-contrast and reduced-motion support.
 
@@ -36,14 +38,15 @@ It is a standalone desktop app. There is no account, no cloud, no sync and no ne
 
 ### Keyboard
 
-| Key | Does |
-|---|---|
-| Space | Start, pause or resume the timer |
-| Ctrl+I | Capture an interruption |
-| Ctrl+N | Add a task |
-| Ctrl+1 / Ctrl+2 / Ctrl+3 | Choose focus, short break or long break (while idle) |
-| Ctrl+, | Open Settings |
-| Escape | Close whatever is innermost: an open menu, then a dialog, then the task drawer |
+| Key                      | Does                                                                           |
+| ------------------------ | ------------------------------------------------------------------------------ |
+| Space                    | Start, pause or resume the timer                                               |
+| Ctrl+I                   | Capture an interruption                                                        |
+| Ctrl+N                   | Add a task                                                                     |
+| Ctrl+1 / Ctrl+2 / Ctrl+3 | Choose focus, short break or long break (while idle)                           |
+| Ctrl+S                   | Skip the current interval (asks once before discarding a focus)                |
+| Ctrl+,                   | Open Settings                                                                  |
+| Escape                   | Close whatever is innermost: an open menu, then a dialog, then the task drawer |
 
 Space belongs to whatever control has focus: tabbing to a button and pressing Space presses that button, not the timer. While a dialog is open, everything behind it is inert.
 
@@ -79,9 +82,9 @@ What it does and does not do:
 - It **does not hide the banner**. Watching a notification cannot stop it. Banners still appear and sounds still play.
 - **Silence banners during focus** is the setting that actually quiets the desktop. It switches GNOME's own Do Not Disturb on for the length of each focus interval and switches it back at the end. It is a separate, off-by-default toggle because it changes a setting that belongs to the desktop rather than to Pomodoro. Banners you had already turned off yourself are left alone, quitting from the tray puts the setting back, and if Pomodoro is killed mid-interval the next launch repairs it.
 
-You choose what is worth keeping: a minimum urgency, whether to capture only during focus, a list of muted apps, and a list of priority apps that bypass the other rules. Pomodoro never captures its own notifications. A notification a sender updates in place — a download counting up, a call still ringing — stays one row in the inbox rather than one per update.
+You choose what is worth keeping: a minimum urgency, whether to capture only during focus, a list of muted apps, and a list of priority apps that bypass the urgency and focus-only rules. Muted apps are always excluded, even if they also appear in the priority list. Pomodoro never captures its own notifications. A notification a sender updates in place — a download counting up, a call still ringing — stays one row in the inbox rather than one per update. The inbox keeps the newest 200 notifications.
 
-The inbox shows each captured notification with its app, urgency, time and whether it arrived during focus. Each can be marked triaged (or moved back to pending), turned into a task, or deleted. Deleting removes the captured copy including its text; a task already made from it stays.
+The inbox shows each captured notification with its app, urgency, time and whether it arrived during focus. Each can be marked triaged (or moved back to pending), turned into a task, or deleted. Deleting removes the copy from the active data file; a task already made from it stays. Previously created backups and exports may still contain the text; use Settings → Backup and transfer → Open data folder to manage recovery copies.
 
 Captured summaries and bodies routinely contain message text and one-time codes. They are written only to the local data file below, which Pomodoro keeps owner-only (`0600`, in a `0700` directory). They are never logged and never leave the machine. Settings → Data has an explicit, confirmed action for deleting every captured copy.
 
@@ -89,17 +92,32 @@ Capture needs a session bus that will hand out a monitor connection, which is th
 
 ## Settings
 
-| Section | What is there |
-|---|---|
-| Timing | Focus, short break and long break lengths; rounds before a long break |
-| Flow | Start breaks automatically; start the next focus automatically |
-| Alerts | Desktop notifications; sound; Test sound |
-| Notification capture | The capture switch and its filters; silence banners during focus |
-| Appearance | Theme; timer face |
-| Data | Clear session history; delete captured notifications — each asks first |
-| Keyboard | The shortcuts above |
+| Section              | What is there                                                                    |
+| -------------------- | -------------------------------------------------------------------------------- |
+| Timing               | Focus, short break and long break lengths; rounds before a long break            |
+| Flow                 | Start breaks automatically; start the next focus automatically                   |
+| Alerts               | Desktop notifications; sound; Test sound                                         |
+| Notification capture | The capture switch and its filters; silence banners during focus                 |
+| Appearance           | Theme; timer face                                                                |
+| Backup and transfer  | Export JSON; import with a preview; export sessions as CSV; open the data folder |
+| Data                 | Clear session history; delete captured notifications — each asks first           |
+| Keyboard             | The shortcuts above                                                              |
 
 Edits belong to you until you press Save: a state change arriving from the timer mid-edit does not overwrite what you were typing, a save the app refuses leaves the dialog open with your edits, and Cancel discards them.
+
+## Ubuntu compatibility
+
+| Ubuntu release | Project coverage                                                                              |
+| -------------- | --------------------------------------------------------------------------------------------- |
+| 26.04 LTS      | Current desktop target; backend, headless desktop smoke and release package installation jobs |
+| 24.04 LTS      | Backend, headless desktop smoke and release package installation jobs                         |
+| 22.04 LTS      | Release build baseline inside an Ubuntu 22.04 container; manual desktop regression checks     |
+
+Release packages target x86_64. Building on a newer Ubuntu release gives that local binary the newer system's library requirements; use the release workflow when retaining the 22.04 baseline matters.
+
+On Ubuntu 26.04's GNOME 50 desktop, GTK and WebKit select the Wayland backend automatically. GNOME needs an AppIndicator extension for tray icons. If no active tray host can be confirmed, or the optional `gdbus` tool is missing, closing exits through the normal save and desktop-banner cleanup path.
+
+The automated desktop tests use Xvfb. Native Wayland, fractional scaling, screen locking, suspend/resume, Orca and tray-extension behavior still require the [manual desktop checks](docs/testing.md#checks-requiring-a-real-desktop). Keep backend selection automatic for ordinary desktop use; the X11 override is specific to headless smoke testing.
 
 ## Install on Ubuntu
 
@@ -126,7 +144,7 @@ From then on `sudo apt upgrade` brings new versions with the rest of the system.
     sudo apt remove pomodoro
     sudo rm /etc/apt/sources.list.d/pomodoro.list /etc/apt/keyrings/pomodoro.gpg
 
-This is a third-party repository, not part of Ubuntu itself: `apt install pomodoro` works only after the two commands above. The name is free — Ubuntu ships the unrelated `gnome-shell-pomodoro`, and nothing else in the archive is called `pomodoro`.
+This is a third-party repository, not part of Ubuntu itself: `apt install pomodoro` works only after adding the repository above. The name is free — Ubuntu ships the unrelated `gnome-shell-pomodoro`, and nothing else in the archive is called `pomodoro`.
 
 ### From a single package
 
@@ -134,10 +152,11 @@ A release also attaches the `.deb` on its own, for a machine that should not car
 
     sudo apt install ./pomodoro_0.1.0_amd64.deb
 
-Or, without administrator rights, install it for your user alone. The package's files go under your home directory, and the launcher entry points at them:
+Or, without administrator rights, extract it for your user alone. The native runtime libraries must already be installed; extraction does not resolve package dependencies. The package's files go under your home directory, and the launcher entry points at them:
 
     dpkg-deb -x pomodoro_0.1.0_amd64.deb /tmp/pomodoro-pkg
     install -Dm755 /tmp/pomodoro-pkg/usr/bin/pomodoro ~/.local/bin/pomodoro
+    mkdir -p ~/.local/share/applications
     cp -r /tmp/pomodoro-pkg/usr/share/icons ~/.local/share/
     sed "s|^Exec=pomodoro$|Exec=$HOME/.local/bin/pomodoro|" \
         /tmp/pomodoro-pkg/usr/share/applications/Pomodoro.desktop \
@@ -147,9 +166,7 @@ Or, without administrator rights, install it for your user alone. The package's 
 
 To remove a per-user install, delete those files. Do not keep both kinds of install at once.
 
-Open Pomodoro from the application launcher. Closing the window hides it in the system tray so an active timer can continue; choose Quit from the tray menu to exit completely.
-
-Released packages are built on Ubuntu 22.04 x86_64, which is the oldest release they are meant for; they install on 22.04 and anything newer. A package you build yourself carries the compatibility of whatever release you build it on.
+Open Pomodoro from the application launcher. With an active tray host, closing the window hides it so an active timer can continue; choose Quit from the tray menu to exit completely. Without a tray host, closing exits and saves the timer as paused, so the app cannot become inaccessible in the background.
 
 ## Local data
 
@@ -162,6 +179,25 @@ The file holds captured notification text, so Pomodoro restricts it to its owner
 If the file cannot be read at launch — truncated by a full disk, or edited by hand into something that will not parse — Pomodoro starts fresh and says so in the window. It does not save over the old file: it is kept beside `pomodoro.json` as `pomodoro.unreadable-<timestamp>.json`, owner-only like the store itself, so it can be repaired or mined by hand. If it cannot be moved aside either — a data folder that has become read-only, say — Pomodoro leaves it exactly where it is and saves nothing for that session, and the notice says so.
 
 Removing the application does not remove this data file.
+
+### Backups, export and import
+
+Settings → Backup and transfer has four actions:
+
+- **Export data** saves all tasks, settings, interruptions, captured notifications and retained session history to a JSON file chosen in a native file dialog. A running timer is saved as paused in the export. The current timer keeps running.
+- **Export CSV** saves every retained session record, not just the recent history shown in the window. Dates use UTC; task text is quoted and formula-like values are escaped for spreadsheet use.
+- **Choose import** reads and validates a JSON file, then shows its name and record counts. Nothing is replaced until you tick the confirmation and choose **Import and replace**. Reset a running or paused interval before importing. A running timer in the chosen file is paused with the time left at preview; waiting to confirm adds no time. Notification capture and desktop Do Not Disturb are switched off until you enable them on this machine. Settings stays open while a transfer is in progress and closes after a successful import, which replaces saved settings.
+- **Open data folder** opens the folder containing `pomodoro.json` and its `backups/` subfolder.
+
+Before import, a storage-format upgrade or clearing session history, Pomodoro saves a recovery copy. It keeps five copies in `backups/`, with the same owner-only permissions as the main store. Import refuses to replace data if the recovery copy or replacement cannot be written. These backups live on the same disk: export a copy to another location for protection against disk loss.
+
+Exports and backups can contain message text and one-time codes. Deleting a notification or clearing the notification inbox changes the active store only; it does not erase older backups, exports or tasks created from those messages. Remove unneeded copies through your file manager. Pomodoro does not create an additional backup when deleting captured notifications.
+
+JSON imports are limited to 32 MiB, 5,000 sessions and 200 captured notifications. Invalid files, duplicate or empty record IDs, unsupported settings and newer schema versions are rejected before replacement. An export that would exceed the import size limit is refused; CSV remains available for session history.
+
+### Storage versions
+
+The current disk format is `schemaVersion: 1`. Existing unversioned stores load as version 0 and migrate on their next successful save, with their original bytes backed up first. If that backup fails, the original stays unchanged and current changes remain unsaved. Pomodoro reports the failure and retries; restore write access to the data folder and its `backups/` folder so it can save. A newer schema encountered by an older application stays at its original path and is protected from writes; use a newer build to open it. Corrupt files still use the recovery behavior described above.
 
 ### Upgrading from the Kipindi build
 
@@ -177,31 +213,38 @@ The old directory is left in place. Remove it once the new build has started cle
 
 Pomodoro is a [Tauri 2](https://tauri.app) application: a Rust backend (`src-tauri/`) that owns the timer, the store, the tray, notification capture and sound, and a React front end (`src/`) that draws it. The window counts the timer down locally from a deadline the backend gives it; the backend only speaks when something other than the clock changes.
 
-Required Ubuntu packages:
+Use the shared prerequisite script on Ubuntu 22.04, 24.04 or 26.04. It prints the package commands by default; installation is explicit:
 
-    sudo apt install libwebkit2gtk-4.1-dev build-essential file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+    bash scripts/setup-linux.sh --print
+    bash scripts/setup-linux.sh --install
 
-Install project dependencies and run the checks. These are the same steps CI runs on every pull request, so running all of them first avoids a red build:
+The script installs the GTK 3, WebKitGTK 4.1, AppIndicator and build prerequisites used by CI. Ubuntu's Universe and normal updates/security repositories must be enabled. Install Node.js and Rust separately.
 
-    npm install
-    npm run build
-    npm test
-    cd src-tauri
-    cargo fmt --all --check
-    cargo clippy --all-targets -- -D warnings
-    cargo test
+For desktop smoke testing, use `bash scripts/setup-linux.sh --install --desktop`; this adds Xvfb and D-Bus tools, plus `webkitgtk-webdriver` on Ubuntu 26.04 or `webkit2gtk-driver` on older LTS releases. See [Testing](docs/testing.md) for the driver, build and isolated-run commands.
 
-No test plays a sound or sends a real notification. Some checks need a real GNOME session — a session bus, a notification daemon, and `gsettings` — so they are marked `#[ignore]` and skipped by CI. Run them on an Ubuntu desktop, from `src-tauri`:
+Use Node.js 22.14 or newer (`.nvmrc` selects Node 22) and stable Rust. From the repository root, install the locked project dependencies and run the checks:
 
-    cargo test -- --ignored --nocapture
+    npm ci
+    npm run check
+    cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
+    cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+    cargo test --locked --manifest-path src-tauri/Cargo.toml
 
-They cover capture against the live bus, a notification arriving mid-focus being filed without disturbing the timer, Pomodoro's own alerts staying out of the inbox, banners being silenced and restored, and carrying a real `app.kipindi.timer` store across. None of them write to your live Pomodoro data or leave the desktop's banner setting changed.
+`npm run check` runs linting, formatting, dependency-license checks, the TypeScript/production build and frontend tests. Build the frontend before running the Rust checks: Tauri's build script needs `dist/`. Use `npm run format` and `cargo fmt --manifest-path src-tauri/Cargo.toml` to apply formatting. Use `npm run test:watch` while working on frontend tests. CI also runs a real desktop smoke test in an isolated XDG directory and D-Bus session; see [Testing](docs/testing.md) for the required drivers and commands.
+
+See [Contributing](CONTRIBUTING.md) for supported environments and review expectations, [Security](SECURITY.md) for private vulnerability reporting, and [Architecture](docs/architecture.md) for module responsibilities. Weekly dependency updates, advisory/license checks and CodeQL workflows are included; GitHub code-scanning results require the repository feature to be enabled.
+
+The normal test suites use fixtures and do not play sounds, send real notifications or change desktop settings. Live desktop checks are marked `#[ignore]` and skipped by CI. They need a real GNOME session with a session bus, a notification daemon, `notify-send` and `gsettings`; they send real notifications and temporarily change the banner setting. Run them only in a dedicated Ubuntu desktop test session:
+
+    cargo test --manifest-path src-tauri/Cargo.toml -- --ignored --nocapture --test-threads=1
+
+They cover capture against the live bus, a notification arriving mid-focus being filed without disturbing the timer, Pomodoro's own alerts staying out of the inbox, banners being silenced and restored, and carrying a real `app.kipindi.timer` store across. The migration check reads an existing legacy store and writes its result to a temporary directory. These checks do not write to your live Pomodoro data; the banner check restores its original setting after the test.
 
 Run the desktop app in development:
 
     npm run tauri dev
 
-Opening `npm run dev` in a browser shows the interface with sample data and no backend. The theme button works there; everything that saves does not.
+Run `npm run dev` and open `http://127.0.0.1:1420` in a browser to see the interface with sample data and no backend. The theme button works there; native commands and saving require the desktop app.
 
 `public/theme-init.js` is the one script outside the bundle. It applies the remembered theme before the first paint, and it is a file rather than an inline script because the content security policy only allows the app's own scripts.
 
@@ -211,7 +254,14 @@ Build a Debian package:
 
 ## Releasing
 
-A release is a tag. Pushing `v0.1.1` builds the package on Ubuntu 22.04, attaches it to a GitHub release, and rebuilds the apt repository from the packages of every release so far, so an older version stays installable while people upgrade. The workflow is `.github/workflows/release.yml`; it refuses to build if the tag and the two version fields disagree.
+A release is a tag. Pushing `v0.1.1` starts the [release workflow](.github/workflows/release.yml):
+
+1. Build the Debian package in an Ubuntu 22.04 container on an Ubuntu 26.04 runner, preserving the older library baseline.
+2. Install the generated package on Ubuntu 24.04 and 26.04 and check for missing shared libraries.
+3. Attach the package to a GitHub release only after those checks pass.
+4. Rebuild and publish the signed apt repository, retaining packages from previous releases.
+
+The workflow refuses to build unless the tag agrees with the version in `package.json`, `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml`.
 
     # set the same version in package.json, src-tauri/tauri.conf.json
     # and src-tauri/Cargo.toml first

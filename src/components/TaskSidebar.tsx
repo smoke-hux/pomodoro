@@ -1,19 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Check,
-  CheckCircle2,
-  Circle,
-  MoreHorizontal,
-  Pencil,
-  Plus,
-  Trash2,
-} from "lucide-react";
-import type {
-  CaptureStatus,
-  DesktopNotification,
-  FocusTask,
-  Interruption,
-} from "../types";
+import { Check, CheckCircle2, Circle, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
+import type { CaptureStatus, DesktopNotification, FocusTask, Interruption } from "../types";
 import { getDayBoundsForKey, isWithinDay, toIsoTime } from "../lib/metrics";
 import { NotificationInbox } from "./NotificationInbox";
 
@@ -109,6 +96,8 @@ function TaskComposer({
   };
 
   return (
+    // Escape cancels the focused editor; this is a form-wide keyboard shortcut.
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
     <form
       className="task-form"
       onSubmit={(event) => {
@@ -267,6 +256,7 @@ function TaskSidebarComponent({
   useEffect(() => {
     setConfirmArmed(false);
     if (confirmDeleteId === null) return;
+    completedRef.current?.querySelector<HTMLButtonElement>(".row-delete.confirming")?.focus();
     const timeout = window.setTimeout(() => setConfirmArmed(true), CONFIRM_ARMING_MS);
     return () => window.clearTimeout(timeout);
   }, [confirmDeleteId]);
@@ -331,7 +321,6 @@ function TaskSidebarComponent({
           // confirmation before the click could land. The timeout stands in.
           // The button it replaces had focus; without this a keyboard user
           // would be dropped to <body> halfway through deleting.
-          autoFocus
           aria-label={`Confirm deleting ${task.title}, including its count of ${task.completedPomodoros} completed sessions`}
           title="Removes the task and its session count. Today's ledger keeps its sessions."
         >
@@ -439,7 +428,11 @@ function TaskSidebarComponent({
                     disabled={selectionLocked}
                     aria-pressed={task.id === activeTaskId}
                     aria-label={`${task.title}, ${task.completedPomodoros} of ${task.estimate} sessions`}
-                    title={selectionLocked ? "Finish or reset the current focus before switching tasks" : "Select for focus"}
+                    title={
+                      selectionLocked
+                        ? "Finish or reset the current focus before switching tasks"
+                        : "Select for focus"
+                    }
                   >
                     <span className="task-title">{task.title}</span>
                     <span className="task-count" aria-hidden="true">
@@ -527,10 +520,7 @@ function TaskSidebarComponent({
                     <button type="button" onClick={() => onConvertInterruption(item.id)}>
                       <Plus aria-hidden="true" size={15} /> Turn into task
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => onHandleInterruption(item.id, true)}
-                    >
+                    <button type="button" onClick={() => onHandleInterruption(item.id, true)}>
                       <Check aria-hidden="true" size={15} /> Mark handled
                     </button>
                     <button type="button" onClick={() => onDeleteInterruption(item.id)}>

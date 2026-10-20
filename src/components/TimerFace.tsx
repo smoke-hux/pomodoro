@@ -23,9 +23,26 @@ interface TimerFaceProps {
 }
 
 const ONES = [
-  "zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
-  "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
-  "sixteen", "seventeen", "eighteen", "nineteen",
+  "zero",
+  "one",
+  "two",
+  "three",
+  "four",
+  "five",
+  "six",
+  "seven",
+  "eight",
+  "nine",
+  "ten",
+  "eleven",
+  "twelve",
+  "thirteen",
+  "fourteen",
+  "fifteen",
+  "sixteen",
+  "seventeen",
+  "eighteen",
+  "nineteen",
 ];
 const TENS = ["", "", "twenty", "thirty", "forty", "fifty"];
 
@@ -136,10 +153,7 @@ export function TimerFace({
     return (
       <output className="timer-face face-bar" aria-label={label}>
         <span className="bar-shell" aria-hidden="true">
-          <span
-            className="bar-fill"
-            style={{ transform: `scaleX(${1 - fraction})` }}
-          />
+          <span className="bar-fill" style={{ transform: `scaleX(${1 - fraction})` }} />
         </span>
         <span className="bar-readout" aria-hidden="true">
           {clockText(remainingSeconds)}
@@ -210,10 +224,7 @@ export function TimerFace({
     return (
       <output className="timer-face face-vessel" aria-label={label}>
         <span className="vessel-shell" aria-hidden="true">
-          <span
-            className="vessel-fill"
-            style={{ transform: `scaleY(${1 - fraction})` }}
-          />
+          <span className="vessel-fill" style={{ transform: `scaleY(${1 - fraction})` }} />
         </span>
         <span className="vessel-readout" aria-hidden="true">
           {clockText(remainingSeconds)}
