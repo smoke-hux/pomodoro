@@ -7,7 +7,7 @@ export type ResolvedTheme = "light" | "dark";
 export const THEME_STORAGE_KEY = "pomodoro.theme";
 const DARK_QUERY = "(prefers-color-scheme: dark)";
 /** `--canvas` in each theme, for the `theme-color` meta tag. */
-const CANVAS: Record<ResolvedTheme, string> = { light: "#f2eee7", dark: "#181512" };
+const CANVAS: Record<ResolvedTheme, string> = { light: "#fafafa", dark: "#242424" };
 
 const ORDER: ThemePreference[] = ["system", "light", "dark"];
 
@@ -40,9 +40,9 @@ export function resolveTheme(preference: ThemePreference, systemDark: boolean): 
  * Puts a preference on the root element, where the stylesheet reads it, and
  * remembers it for the next launch. The real setting lives in the backend
  * store and arrives with the first snapshot, which is after the first paint;
- * public/theme-init.js reads this local copy back before anything is drawn. "system" is resolved by the stylesheet's
- * own `prefers-color-scheme` block, so a desktop switching between light and
- * dark repaints the window without any script running.
+ * public/theme-init.js reads this local copy back before anything is drawn.
+ * For System, the stylesheet uses the native desktop preference supplied by
+ * useDesktopAppearance, with `prefers-color-scheme` as the browser fallback.
  */
 export function applyTheme(preference: ThemePreference, systemDark: boolean) {
   document.documentElement.dataset.theme = preference;
@@ -61,11 +61,8 @@ function systemPrefersDark(): boolean {
 }
 
 /**
- * Whether the desktop is currently asking for dark, kept live.
- *
- * On Linux the webview takes this from the desktop's appearance setting (the
- * XDG settings portal, which GNOME's Dark style switch writes), so it changes
- * while the app is open — at sunset, if the desktop is scheduled to.
+ * The WebView/browser preference, kept live. The app uses this when the native
+ * desktop portal has no color-scheme preference or cannot be reached.
  */
 export function useSystemDark(): boolean {
   const [dark, setDark] = useState(systemPrefersDark);

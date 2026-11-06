@@ -10,6 +10,7 @@ import {
   isWithinDay,
 } from "./lib/metrics";
 import { applyTheme, nextTheme, resolveTheme, useSystemDark } from "./lib/theme";
+import { useDesktopAppearance } from "./lib/desktopAppearance";
 import { browserPreview } from "./lib/browserPreview";
 import { useAppCommands } from "./lib/useAppCommands";
 import { useKeyboardShortcuts } from "./lib/useKeyboardShortcuts";
@@ -90,7 +91,11 @@ export function PomodoroWorkspace({ layout = "legacy" }: { layout?: "legacy" | "
   // do: until then the snapshot holds the default, and applying that would
   // repaint a Dark user's window as System and overwrite the remembered choice
   // that public/theme-init.js painted the first frame with.
-  const systemDark = useSystemDark();
+  const browserDark = useSystemDark();
+  const desktopAppearance = useDesktopAppearance(inTauri);
+  const systemDark = desktopAppearance?.colorScheme
+    ? desktopAppearance.colorScheme === "dark"
+    : browserDark;
   const theme = snapshot.settings.theme;
   useEffect(() => {
     if (settingsLoaded) applyTheme(theme, systemDark);

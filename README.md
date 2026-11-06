@@ -24,7 +24,7 @@ It is a standalone desktop app. There is no account, no cloud, no sync and no ne
 
 **The tray.** On a desktop with an active AppIndicator tray host, closing the window hides it; the tray menu shows it again, starts, pauses or resumes the timer — the item says which — skips the current interval, or quits. If the tray is unavailable, closing exits safely, pauses the timer and restores desktop banners. Only one copy of Pomodoro runs at a time; launching it again shows the existing window.
 
-**Light and dark.** Follows the desktop's appearance setting live, or stays on the theme you pick, from the toolbar button or Settings → Appearance. Keyboard navigation throughout, high-contrast and reduced-motion support.
+**Desktop appearance.** Neutral Ubuntu/GNOME surfaces follow the desktop's light or dark appearance and accent color, or stay on the theme you pick from the toolbar button or Settings → Appearance. Keyboard navigation throughout, with desktop high-contrast and reduced-motion preferences respected.
 
 ## A day with it
 
@@ -70,7 +70,9 @@ An interval's alarm is never lost to a lesser sound: if it falls due while a tas
 
 ### Theme
 
-The button beside the settings gear steps through **System**, **Light** and **Dark** and saves at once. On System, Pomodoro follows the desktop's appearance setting — GNOME's Dark style switch — and repaints while it is open, without a restart. The last theme used is applied before the window first paints, so launching never flashes the wrong one.
+The button beside the settings gear steps through **System**, **Light** and **Dark** and saves at once. On System, Pomodoro follows the desktop's appearance setting — GNOME's Dark style switch — and repaints while it is open, without a restart. Explicit Light and Dark choices take precedence over the desktop's color scheme. The remembered appearance is applied before the first paint and refreshed from the desktop after startup.
+
+The desktop accent color carries through to focus controls and keyboard focus rings, with its brightness adjusted for readable contrast in each theme. High contrast and reduced motion also follow desktop preferences. These integrations read appearance settings without changing them; when native preferences are unavailable, the interface falls back to WebView/browser media preferences and its default Ubuntu accent.
 
 ## Desktop notification capture
 

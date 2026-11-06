@@ -250,8 +250,39 @@
   }
 }
 
-@media (forced-colors: active) {
+/* GTK accessibility preferences are also supplied directly by the desktop. */
+:root[data-reduced-motion="true"] *,
+:root[data-reduced-motion="true"] *::before,
+:root[data-reduced-motion="true"] *::after {
+  scroll-behavior: auto !important;
+  transition: none !important;
+  animation: none !important;
+}
+
+:root[data-high-contrast="true"] {
+  --text-muted: var(--text);
+  --divider: var(--text);
+  --control-border: var(--text);
+}
+
+:root[data-high-contrast="true"] .task-row.selected,
+:root[data-high-contrast="true"] .phase-tabs button[aria-pressed="true"] {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+@media (prefers-contrast: more) {
   :root {
+    --text-muted: var(--text);
+    --divider: var(--text);
+    --control-border: var(--text);
+  }
+}
+
+@media (forced-colors: active) {
+  :root,
+  :root[data-theme],
+  :root[data-high-contrast] {
     --canvas: Canvas;
     --surface: Canvas;
     --surface-raised: Canvas;

@@ -1,6 +1,7 @@
 //! Application composition. Runtime, IPC commands, and desktop UI live in their own modules.
 
 mod alerts;
+mod appearance;
 mod commands;
 mod data_transfer;
 mod domain;
@@ -30,6 +31,7 @@ pub fn run() {
         .setup(runtime::setup)
         .on_window_event(tray::handle_window_event)
         .invoke_handler(tauri::generate_handler![
+            appearance::get_desktop_appearance,
             commands::get_snapshot,
             commands::toggle_timer,
             commands::reset_timer,

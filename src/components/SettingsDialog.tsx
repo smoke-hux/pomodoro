@@ -567,6 +567,10 @@ function SettingsDialogComponent({
                   <option value="dark">Dark</option>
                 </select>
               </div>
+              <p className="setting-hint">
+                System follows your desktop’s light or dark appearance. Accent color, high contrast
+                and reduced motion follow the desktop in every theme.
+              </p>
 
               <div className="setting-stack">
                 <span className="setting-stack-label" id="timer-face-label">

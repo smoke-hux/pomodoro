@@ -144,6 +144,21 @@ async function state(predicate, description) {
   });
 }
 
+async function theme(preference) {
+  await state((data) => data.settings.theme === preference, `saved ${preference} theme`);
+  await until(`rendered ${preference} theme`, () =>
+    evaluate(
+      `const root = document.documentElement;
+       return root.dataset.theme === arguments[0] &&
+         (arguments[0] === "system" || getComputedStyle(root).colorScheme === arguments[0]);`,
+      preference,
+    ),
+  );
+  return evaluate(
+    'return getComputedStyle(document.documentElement).getPropertyValue("--canvas").trim();',
+  );
+}
+
 async function stop() {
   if (session) {
     await command("DELETE", "").catch(() => {});
@@ -266,7 +281,16 @@ async function smoke() {
   await click('.settings-dialog button[type="submit"]');
   await state((data) => data.settings.focusMinutes === 1, "saved duration");
   await click('button[aria-label^="Theme:"]');
-  await state((data) => data.settings.theme === "light", "saved theme");
+  const lightCanvas = await theme("light");
+  await screenshot("light-theme");
+  await click('button[aria-label^="Theme:"]');
+  const darkCanvas = await theme("dark");
+  assert.notEqual(darkCanvas, lightCanvas, "Dark appearance must repaint the actual palette");
+  await screenshot("dark-theme");
+  await click('button[aria-label^="Theme:"]');
+  await theme("system");
+  await click('button[aria-label^="Theme:"]');
+  assert.equal(await theme("light"), lightCanvas, "Explicit light must override system appearance");
 
   await command("POST", "/actions", {
     actions: [
@@ -315,7 +339,7 @@ async function smoke() {
     ),
     "Desktop smoke task",
   );
-  assert.equal(await evaluate("return document.documentElement.dataset.theme;"), "light");
+  assert.equal(await theme("light"), lightCanvas, "The saved theme must repaint after restart");
   assert.equal((await readStore()).timer.remainingSeconds, paused.timer.remainingSeconds);
   await click(".timer-controls .primary-control");
   const running = await state((data) => data.timer.status === "running", "resumed timer");
@@ -365,7 +389,7 @@ async function smoke() {
   await rm(temporary, { recursive: true, force: true });
   temporary = undefined;
   console.log(
-    "Desktop smoke passed: task, keyboard, settings, pause/resume, restarts, completion, recovery.",
+    "Desktop smoke passed: task, keyboard, settings, appearance, pause/resume, restarts, completion, recovery.",
   );
 }
 

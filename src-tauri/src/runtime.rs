@@ -611,6 +611,7 @@ impl RuntimeState {
 }
 
 pub(crate) fn shut_down(app: &AppHandle) {
+    crate::appearance::stop(app);
     app.state::<RuntimeState>().shut_down(now_ms());
 }
 
@@ -635,6 +636,7 @@ pub(crate) fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Erro
         }
     }
     app.manage(state);
+    crate::appearance::start(app.handle());
     // GNOME can run without an AppIndicator host. A missing tray must not
     // prevent the timer from starting; close then follows normal window exit.
     if let Err(error) = build_tray(app) {

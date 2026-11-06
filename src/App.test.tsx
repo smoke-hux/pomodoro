@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactElement } from "react";
 
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 let broadcast: (payload: unknown) => void = () => {};
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: (_event: string, handler: (event: { payload: unknown }) => void) => {
-    broadcast = (payload) => handler({ payload });
+  listen: (event: string, handler: (event: { payload: unknown }) => void) => {
+    if (event === "state-changed") broadcast = (payload) => handler({ payload });
     return Promise.resolve(() => {});
   },
 }));
@@ -15,6 +16,17 @@ vi.mock("@tauri-apps/api/event", () => ({
 import App, { PomodoroWorkspace } from "./App";
 import { defaultSnapshot } from "./types";
 import type { AppSnapshot, SessionRecord } from "./types";
+
+// The initial snapshot is asynchronous. Finding the toolbar proves its DOM
+// committed, but not that the enabled keyboard handler and child request
+// effects have finished mounting. Flush that startup work before interacting.
+async function renderReady(ui: ReactElement = <App />) {
+  let result!: ReturnType<typeof render>;
+  await act(async () => {
+    result = render(ui);
+  });
+  return result;
+}
 
 function session(id: string, endedAt = Date.now() - 86_400_000): SessionRecord {
   return {
@@ -49,7 +61,7 @@ describe("when the stored settings could not be read", () => {
   });
 
   it("does not let the theme button save the defaults over them", async () => {
-    render(<App />);
+    await renderReady();
     const theme = (await screen.findByRole("button", { name: /^Theme:/ })) as HTMLButtonElement;
     expect(theme.disabled).toBe(true);
 
@@ -58,7 +70,7 @@ describe("when the stored settings could not be read", () => {
   });
 
   it("does not open the settings dialog over them", async () => {
-    render(<App />);
+    await renderReady();
     fireEvent.click(await screen.findByRole("button", { name: "Open settings" }));
 
     await waitFor(() => expect(screen.getByText(/Settings are not available/)).toBeTruthy());
@@ -66,7 +78,7 @@ describe("when the stored settings could not be read", () => {
   });
 
   it("still lets Escape dismiss a dialog opened from the toolbar", async () => {
-    render(<App />);
+    await renderReady();
     const toolbar = (await screen.findByRole("button", { name: "Open settings" })).closest(
       "header",
     )!;
@@ -84,7 +96,7 @@ describe("the theme button", () => {
     invoke.mockImplementation((command: string) =>
       command === "get_snapshot" ? Promise.resolve(defaultSnapshot) : new Promise(() => {}),
     );
-    render(<App />);
+    await renderReady();
     const theme = (await screen.findByRole("button", { name: /^Theme:/ })) as HTMLButtonElement;
     await waitFor(() => expect(theme.disabled).toBe(false));
 
@@ -104,7 +116,7 @@ describe("the theme button after a burst of clicks", () => {
     invoke.mockImplementation((command: string) =>
       Promise.resolve(command === "get_snapshot" ? defaultSnapshot : undefined),
     );
-    render(<App />);
+    await renderReady();
     const theme = (await screen.findByRole("button", { name: /^Theme:/ })) as HTMLButtonElement;
     await waitFor(() => expect(theme.disabled).toBe(false));
 
@@ -142,7 +154,7 @@ describe("sound", () => {
       Promise.resolve(command === "get_snapshot" ? defaultSnapshot : undefined),
     );
     try {
-      render(<App />);
+      await renderReady();
       await screen.findByRole("button", { name: "Open settings" });
       await act(async () =>
         broadcast({ ...defaultSnapshot, sessions: [session("just-finished")] }),
@@ -157,7 +169,7 @@ describe("sound", () => {
     invoke.mockImplementation((command: string) =>
       Promise.resolve(command === "get_snapshot" ? defaultSnapshot : undefined),
     );
-    render(<App />);
+    await renderReady();
     fireEvent.click(await screen.findByRole("button", { name: "Open settings" }));
     fireEvent.click(await screen.findByRole("button", { name: "Test sound" }));
 
@@ -171,7 +183,7 @@ describe("a row menu left open from the keyboard", () => {
   it("is closed when a shortcut opens a dialog over it", async () => {
     // The browser preview has tasks to open a menu on.
     delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
-    render(<App />);
+    await renderReady();
     const menu = (await screen.findByLabelText(/More actions for Outline/)).closest("details")!;
     menu.open = true;
 
@@ -189,7 +201,7 @@ describe("when the saved data could not be read", () => {
           : undefined,
       ),
     );
-    render(<App />);
+    await renderReady();
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("could not read its saved data");
@@ -208,7 +220,7 @@ describe("when the saved data could not be read", () => {
         command === "get_snapshot" ? { ...defaultSnapshot, recoveredStore: "" } : undefined,
       ),
     );
-    render(<App />);
+    await renderReady();
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("nothing is being saved");
@@ -219,7 +231,7 @@ describe("when the saved data could not be read", () => {
     invoke.mockImplementation((command: string) =>
       Promise.resolve(command === "get_snapshot" ? defaultSnapshot : undefined),
     );
-    render(<App />);
+    await renderReady();
     await screen.findByRole("button", { name: "Open settings" });
     expect(screen.queryByRole("alert")).toBeNull();
   });
@@ -231,7 +243,7 @@ describe("the browser preview", () => {
     window.localStorage.setItem("pomodoro.theme", "dark");
     document.documentElement.dataset.theme = "dark"; // as theme-init.js leaves it
     try {
-      render(<App />);
+      await renderReady();
       await screen.findByRole("button", { name: /^Theme: Dark/ });
       expect(document.documentElement.dataset.theme).toBe("dark");
       expect(window.localStorage.getItem("pomodoro.theme")).toBe("dark");
@@ -253,7 +265,7 @@ describe("start-up", () => {
         order.push(broadcast === previous ? "snapshot-first" : "listening-first");
       return Promise.resolve(command === "get_snapshot" ? defaultSnapshot : undefined);
     });
-    render(<App />);
+    await renderReady();
     await screen.findByRole("button", { name: "Open settings" });
 
     expect(order).toEqual(["listening-first"]);
@@ -295,7 +307,7 @@ describe("the Space shortcut", () => {
     invoke.mockImplementation((command: string) =>
       Promise.resolve(command === "get_snapshot" ? defaultSnapshot : undefined),
     );
-    render(<App />);
+    await renderReady();
     await screen.findByRole("button", { name: "Open settings" });
 
     fireEvent.keyDown(document.body, { code: "Space", key: " " });
@@ -344,7 +356,7 @@ describe("the Ctrl+S shortcut", () => {
     invoke.mockImplementation((command: string) =>
       command === "get_snapshot" ? Promise.reject("unavailable") : Promise.resolve(),
     );
-    render(<App />);
+    await renderReady();
     await screen.findByRole("button", { name: "Open settings" });
     fireEvent.keyDown(document.body, { key: "s", ctrlKey: true });
     expect(skips()).toBe(0);
@@ -368,7 +380,7 @@ describe("the Ctrl+S shortcut", () => {
     invoke.mockImplementation((command: string) =>
       Promise.resolve(command === "get_snapshot" ? snapshot : undefined),
     );
-    render(<App />);
+    await renderReady();
     const menu = (await screen.findByLabelText("More actions for Write the report")).closest(
       "details",
     )!;
@@ -399,7 +411,7 @@ describe("the Ctrl+S shortcut", () => {
           : undefined,
       ),
     );
-    render(<App />);
+    await renderReady();
     await screen.findByRole("button", { name: "Open settings" });
 
     fireEvent.keyDown(document.body, { key: "s", ctrlKey: true });
@@ -415,7 +427,7 @@ describe("the Ctrl+S shortcut", () => {
           : undefined,
       ),
     );
-    render(<App />);
+    await renderReady();
     await screen.findByRole("button", { name: "Open settings" });
 
     fireEvent.keyDown(document.body, { key: "s", ctrlKey: true });
@@ -439,7 +451,7 @@ describe("the Ctrl+S shortcut", () => {
           : undefined,
       ),
     );
-    render(<App />);
+    await renderReady();
     await screen.findByRole("button", { name: "Open settings" });
 
     fireEvent.keyDown(document.body, { key: "s", ctrlKey: true });
@@ -454,7 +466,7 @@ describe("the Ctrl+S shortcut", () => {
     invoke.mockImplementation((command: string) =>
       Promise.resolve(command === "get_snapshot" ? defaultSnapshot : undefined),
     );
-    render(<App />);
+    await renderReady();
     await screen.findByRole("button", { name: "Open settings" });
 
     fireEvent.keyDown(document.body, { key: "s" });
@@ -486,7 +498,7 @@ describe("an open dialog", () => {
         return new Promise<void>((resolve) => (finishImport = resolve));
       return Promise.resolve();
     });
-    render(<App />);
+    await renderReady();
     fireEvent.click(await screen.findByRole("button", { name: "Open settings" }));
     fireEvent.click(screen.getByRole("button", { name: "Choose import" }));
     fireEvent.click(await screen.findByLabelText("Replace my data with this file"));
@@ -506,7 +518,7 @@ describe("an open dialog", () => {
     invoke.mockImplementation((command: string) =>
       Promise.resolve(command === "get_snapshot" ? defaultSnapshot : undefined),
     );
-    const { container } = render(<App />);
+    const { container } = await renderReady();
     const toolbar = () => container.querySelector(".app-toolbar") as HTMLElement;
     const workspace = () => container.querySelector(".workspace") as HTMLElement;
     fireEvent.click(await screen.findByRole("button", { name: "Open settings" }));
@@ -527,7 +539,7 @@ describe("the timer-first workspace", () => {
     invoke.mockImplementation((command: string) =>
       Promise.resolve(command === "get_snapshot" ? defaultSnapshot : undefined),
     );
-    const { container } = render(<PomodoroWorkspace layout="timer-first" />);
+    const { container } = await renderReady(<PomodoroWorkspace layout="timer-first" />);
     await screen.findByRole("button", { name: "Open settings" });
     const workspace = container.querySelector(".workspace")!;
     expect(workspace.children[0].classList.contains("focus-column")).toBe(true);

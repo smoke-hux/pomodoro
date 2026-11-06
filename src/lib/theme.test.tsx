@@ -83,9 +83,9 @@ describe("applying a preference", () => {
     meta.name = "theme-color";
     document.head.append(meta);
     applyTheme("system", true);
-    expect(meta.content).toBe("#181512");
+    expect(meta.content).toBe("#242424");
     applyTheme("light", true);
-    expect(meta.content).toBe("#f2eee7");
+    expect(meta.content).toBe("#fafafa");
     meta.remove();
   });
 });

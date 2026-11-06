@@ -3,84 +3,88 @@
   font-family: "Ubuntu Sans", Cantarell, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+  accent-color: var(--focus);
+  scrollbar-color: var(--control-border) transparent;
 
-  --canvas: #f2eee7;
-  --surface: #fbf8f3;
-  --surface-raised: #fffdf9;
-  --surface-selected: #eee5dc;
-  --surface-hover: #f3ece4;
-  --text: #25211d;
-  --text-muted: #6b635b;
-  --divider: #d7d0c7;
-  --control-border: #786e63;
-  --focus: #98452b;
-  --focus-hover: #7d351f;
+  --canvas: #fafafa;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-selected: #ebebeb;
+  --surface-hover: #f0f0f0;
+  --text: #252525;
+  --text-muted: #626262;
+  --divider: #dedede;
+  --control-border: #858585;
+  --focus: var(--desktop-accent-light, #b83b0e);
+  --focus-hover: color-mix(in srgb, var(--focus), #000000 12%);
   --on-focus: #ffffff;
-  --break: #667044;
-  --break-hover: #535c37;
+  --break: #287449;
+  --break-hover: #205d3b;
   --on-break: #ffffff;
-  --danger: #9b3632;
-  --danger-hover: #7f2825;
+  --danger: #b9232e;
+  --danger-hover: #9c1d27;
   --on-danger: #ffffff;
-  --backdrop: rgb(37 33 29 / 48%);
-  --focus-ring: #98452b;
-  --shadow-menu: 0 2px 8px rgb(37 33 29 / 14%);
+  --backdrop: rgb(0 0 0 / 44%);
+  --focus-ring: var(--focus);
+  --shadow-menu: 0 2px 8px rgb(0 0 0 / 14%);
 
   --toolbar-height: 52px;
   --sidebar-width: 256px;
   --radius-sm: 4px;
-  --radius-md: 6px;
+  --radius-md: 8px;
   --radius-lg: 8px;
 }
 
-:root[data-theme="dark"] {
+/* Native appearance wins over a stale WebKit media query. Keep these selectors
+   low-specificity so accessibility settings can override either theme. */
+:root:where([data-theme="dark"], [data-theme="system"][data-system-theme="dark"]) {
   color-scheme: dark;
-  --canvas: #181512;
-  --surface: #211d19;
-  --surface-raised: #29241f;
-  --surface-selected: #312821;
-  --surface-hover: #2a241f;
-  --text: #f4eee6;
-  --text-muted: #b9aea0;
-  --divider: #403931;
-  --control-border: #837668;
-  --focus: #dd825d;
-  --focus-hover: #ee9a75;
-  --on-focus: #2a1711;
-  --break: #a9b477;
-  --break-hover: #bbc78a;
-  --on-break: #171a0e;
-  --danger: #e87a73;
-  --danger-hover: #f18e87;
-  --on-danger: #2b1110;
+  --canvas: #242424;
+  --surface: #303030;
+  --surface-raised: #3a3a3a;
+  --surface-selected: #444444;
+  --surface-hover: #3d3d3d;
+  --text: #f5f5f5;
+  --text-muted: #c2c2c2;
+  --divider: #484848;
+  --control-border: #8a8a8a;
+  --focus: var(--desktop-accent-dark, #ff9866);
+  --focus-hover: color-mix(in srgb, var(--focus), #ffffff 12%);
+  --on-focus: #1e1e1e;
+  --break: #8dd9aa;
+  --break-hover: #a2e1ba;
+  --on-break: #14291d;
+  --danger: #ff8b91;
+  --danger-hover: #ffa2a7;
+  --on-danger: #321013;
   --backdrop: rgb(0 0 0 / 62%);
-  --focus-ring: #dd825d;
+  --focus-ring: var(--focus);
   --shadow-menu: 0 2px 8px rgb(0 0 0 / 38%);
 }
 
 @media (prefers-color-scheme: dark) {
-  :root[data-theme="system"] {
+  :root:where([data-theme="system"]:not([data-system-theme])) {
     color-scheme: dark;
-    --canvas: #181512;
-    --surface: #211d19;
-    --surface-raised: #29241f;
-    --surface-selected: #312821;
-    --surface-hover: #2a241f;
-    --text: #f4eee6;
-    --text-muted: #b9aea0;
-    --divider: #403931;
-    --control-border: #837668;
-    --focus: #dd825d;
-    --focus-hover: #ee9a75;
-    --on-focus: #2a1711;
-    --break: #a9b477;
-    --break-hover: #bbc78a;
-    --on-break: #171a0e;
-    --danger: #e87a73;
-    --danger-hover: #f18e87;
-    --on-danger: #2b1110;
+    --canvas: #242424;
+    --surface: #303030;
+    --surface-raised: #3a3a3a;
+    --surface-selected: #444444;
+    --surface-hover: #3d3d3d;
+    --text: #f5f5f5;
+    --text-muted: #c2c2c2;
+    --divider: #484848;
+    --control-border: #8a8a8a;
+    --focus: var(--desktop-accent-dark, #ff9866);
+    --focus-hover: color-mix(in srgb, var(--focus), #ffffff 12%);
+    --on-focus: #1e1e1e;
+    --break: #8dd9aa;
+    --break-hover: #a2e1ba;
+    --on-break: #14291d;
+    --danger: #ff8b91;
+    --danger-hover: #ffa2a7;
+    --on-danger: #321013;
     --backdrop: rgb(0 0 0 / 62%);
-    --focus-ring: #dd825d;
+    --focus-ring: var(--focus);
     --shadow-menu: 0 2px 8px rgb(0 0 0 / 38%);
   }
 }
@@ -134,13 +138,7 @@ summary {
     background-color 140ms ease,
     border-color 140ms ease,
     color 140ms ease,
-    opacity 140ms ease,
-    transform 100ms ease;
-}
-
-button:active:not(:disabled),
-summary:active {
-  transform: translateY(1px);
+    opacity 140ms ease;
 }
 
 button:disabled,
